@@ -1,0 +1,10 @@
+#
+# LWIP
+#
+CONFIG_LWIP_IP_FORWARD=y
+CONFIG_LWIP_IPV4_NAPT=y
+
+#
+# Wi-Fi Configuration
+#
+CONFIG_WIFI_APSTA=y

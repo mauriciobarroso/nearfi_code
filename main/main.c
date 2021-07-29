@@ -8,398 +8,367 @@
 /* inclusions ----------------------------------------------------------------*/
 
 #include <string.h>
-#include <ws2812_led.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "driver/gpio.h"
 
 #include "esp_wifi.h"
 #include "esp_event.h"
-#include "nvs_flash.h"
-#include "esp_wps.h"
 #include "esp_log.h"
+#include "esp_wps.h"
+
+#include "driver/gpio.h"
+
+#include "nvs_flash.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "lwip/lwip_napt.h"
 
+#include "button.h"
+#include "wifi.h"
+#include "ws2812_led.h"
+
+
 /* macros --------------------------------------------------------------------*/
 
-#define SOFTAP_SSID			"myssid"
-#define SOFTAP_PASS			""
-#define SOFTAP_CHANNEL		1
-#define SOFTAP_MAX_STA_CONN	4
-
-#define MAXIMUM_RETRY		5
-
-#define WIFI_CONNECTED_BIT	BIT0
-#define WIFI_FAIL_BIT		BIT1
-
-#define MY_DNS_IP_ADDR 		0x08080808 // 8.8.8.8
-
-#define RSSI_THRESHOLD		-20
+#define MY_DNS_IP_ADDR 		0x08080808	/* 8.8.8.8 */
+#define RSSI_THRESHOLD		-25
 
 /* typedef -------------------------------------------------------------------*/
 
 /* data declaration ----------------------------------------------------------*/
 
-static const char *TAG = "wifi";
-static int s_retry_num = 0;
-static esp_wps_config_t wps_config = WPS_CONFIG_INIT_DEFAULT ( WPS_TYPE_PBC );
-static wifi_config_t wps_ap_creds[MAX_WPS_AP_CRED];
-static int s_ap_creds_num = 0;
-static TaskHandle_t wps_task_handle;
+/* Tag for debugging */
+static const char * TAG = "app";
+
+/* Components instances */
+static wifi_t wifi;
+static button_t button;
+
+/* Application variables */
+static TaskHandle_t tryToReconnectHandle = NULL;
+uint8_t updateLed = 0;
 
 /* function declaration ------------------------------------------------------*/
 
-static void wifi_event_handler (void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
-static void ip_event_handler ( void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
-static void wifi_init_apsta ( void );
-static void disconnect_task ( void * arg );
-static void wps_task ( void * arg );
-static void IRAM_ATTR give_notification ( void * arg );
-static esp_err_t rgb_init ( void );
+static esp_err_t nvsInit(void);
+
+/* FreeRTOS tasks */
+static void wifiEventsTask(void * arg);
+static void ipEventsTask(void * arg);
+static void provEventsTask(void * arg);
+static void buttonEventsTask(void * arg);
+static void disconnectClientTask(void * arg);
+static void tryToReconnectTask(void * arg);
 
 /* main ----------------------------------------------------------------------*/
 
 void app_main(void)
 {
+	ESP_LOGI(TAG, "Initializing components instances");
+
     /* Initialize NVS */
-    esp_err_t ret = nvs_flash_init ();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND )
-    {
-      ESP_ERROR_CHECK(nvs_flash_erase () );
-      ret = nvs_flash_init ();
-    }
-    ESP_ERROR_CHECK(ret);
+	ESP_ERROR_CHECK(nvsInit());
+//	nvs_flash_erase();
 
-    ESP_LOGI ( TAG, "ESP32-S2 Wi-Fi mode AP + STA" );
-    wifi_init_apsta ();
-    rgb_init ();
+	/* Initialize WS2812B LED */
+	ESP_ERROR_CHECK(ws2812_led_init());
+	ws2812_led_set_rgb(0, 63, 63);	/* Purple */
 
-    /* Initialize NAT */
-    ip_napt_enable ( htonl ( 0xC0A80401 ), 1 );	/* 192.168.4.1 */
-    ESP_LOGI ( TAG, "NAT is enabled" );
+	/* Initialize Button instance */
+	ESP_ERROR_CHECK(button_Init(&button));
 
-    /* Create user tasks */
-    xTaskCreate ( disconnect_task, "Disconnect Task", configMINIMAL_STACK_SIZE * 3, NULL, 3, NULL );
-    xTaskCreate ( wps_task, "WPS Task", configMINIMAL_STACK_SIZE * 3, NULL, 2, &wps_task_handle );
+	/* Initialize Wifi instance */
+	ESP_ERROR_CHECK(wifi_Init(&wifi));
+
+	/* Create FreeRTOS tasks */
+	xTaskCreate(wifiEventsTask, "Wi-Fi Events Task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 1, NULL);
+	xTaskCreate(ipEventsTask, "IP Events Task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 2, NULL);
+	xTaskCreate(provEventsTask, "Provisioning Events Task", configMINIMAL_STACK_SIZE * 4, NULL, configMAX_PRIORITIES - 3, NULL);
+	xTaskCreate(buttonEventsTask, "Button Events Task", configMINIMAL_STACK_SIZE * 4, NULL, tskIDLE_PRIORITY + 2, NULL);
+	xTaskCreate(disconnectClientTask, "Disconnect Client Task", configMINIMAL_STACK_SIZE * 4, NULL, tskIDLE_PRIORITY + 1, NULL);
 }
 
 /* function definition -------------------------------------------------------*/
 
-static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
-{
-    switch ( event_id )
-    {
-    	case WIFI_EVENT_AP_START:
-    	{
-    		ESP_LOGI ( TAG, "WIFI_EVENT_AP_START" );
-    		ESP_LOGI( TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d",
-    		    		SOFTAP_SSID, SOFTAP_PASS, SOFTAP_CHANNEL );
-    		break;
-    	}
+static void wifiEventsTask(void * arg) {
+	EventBits_t bits;
+	const EventBits_t bitsWaitFor = (WIFI_EVENT_STA_CONNECTED_BIT |
+									 WIFI_EVENT_STA_DISCONNECTED_BIT |
+									 WIFI_EVENT_AP_STACONNECTED_BIT);
 
-    	case WIFI_EVENT_AP_STACONNECTED:
-    	{
-    		ESP_LOGI ( TAG, "WIFI_EVENT_AP_STACONNECTED" );
-			wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
-			ESP_LOGI(TAG, "station "MACSTR" join, AID=%d",
-					MAC2STR(event->mac), event->aid);
+	for(;;) {
+		/* Wait until some bit is set */
+		bits = xEventGroupWaitBits(wifi.wifiEventGroup, bitsWaitFor, pdTRUE, pdFALSE, portMAX_DELAY);
+
+		if(bits & WIFI_EVENT_STA_CONNECTED_BIT) {
+			/* Delete task to reconnect to AP */
+			if(tryToReconnectHandle != NULL) {
+				vTaskDelete(tryToReconnectHandle);
+				tryToReconnectHandle = NULL;
+			}
+		}
+		else if(bits & WIFI_EVENT_STA_DISCONNECTED_BIT) {
+			/* Create task to reconnect to AP and set RGB led in blue color */
+			if(tryToReconnectHandle == NULL) {
+				xTaskCreate(tryToReconnectTask, "Try To Reconnect Task", configMINIMAL_STACK_SIZE * 3, NULL, tskIDLE_PRIORITY + 1, &tryToReconnectHandle);
+			}
+
+			updateLed = 0;
+
+	        ws2812_led_set_rgb(0, 127, 0);	/* Red */
+		}
+		else if(bits & WIFI_EVENT_AP_STACONNECTED_BIT) {
+			wifi_event_ap_staconnected_t * event = (wifi_event_ap_staconnected_t *)wifi.wifiEventData;
+
+			ESP_LOGI(TAG, "station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
 
 			/* If the station connected is not close to ESP32-S2, then is connection is rejected */
-			wifi_sta_list_t sta = { 0 };
-			esp_wifi_ap_get_sta_list (&sta);
-			for ( uint8_t i = 0; i < sta.num; i++ ) {
-				ESP_LOGI ( TAG, "station "MACSTR", RSSI: %d",
-						MAC2STR( sta.sta [ i ].mac ),
-						sta.sta [ i ].rssi );
+			wifi_sta_list_t sta;
 
-				if ( !strncmp( ( const char * ) sta.sta [ i ].mac, ( const char * ) event->mac, 6 ) )
-				{
-					if ( sta.sta [ i ].rssi <= RSSI_THRESHOLD )
-						esp_wifi_deauth_sta ( event->aid );
-				}
-			}
-			break;
-    	}
+			esp_wifi_ap_get_sta_list(&sta);
 
-    	case WIFI_EVENT_AP_STADISCONNECTED:
-    	{
-    		ESP_LOGI ( TAG, "WIFI_EVENT_AP_STADISCONNECTED" );
-            wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
-            ESP_LOGI(TAG, "station "MACSTR" leave, AID=%d",
-                     MAC2STR(event->mac), event->aid);
-            break;
-    	}
+			for(uint8_t i = 0; i < sta.num; i++) {
+				ESP_LOGI(TAG, "station "MACSTR", RSSI: %d", MAC2STR(sta.sta[i].mac), sta.sta[i].rssi);
 
-    	case WIFI_EVENT_STA_START:
-    	{
-    		ESP_LOGI ( TAG, "WIFI_EVENT_STA_START" );
-            esp_wifi_connect();
-        	break;
-    	}
-
-    	case WIFI_EVENT_STA_DISCONNECTED:
-    	{
-    		ESP_LOGI ( TAG, "WIFI_EVENT_STA_DISCONNECTED" );
-    		wifi_event_sta_disconnected_t * event = ( wifi_event_sta_disconnected_t * ) event_data;
-    		ESP_LOGI ( TAG, "reason: %d", event->reason );
-
-    		ws2812_led_set_hsv ( 1, 100, 25 );
-
-    		switch ( event->reason )
-    		{
-    			case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
-
-    			{
-					break;
-				}
-
-    			case WIFI_REASON_ASSOC_LEAVE:
-    			{
-    				break;
-				}
-
-    			default:
-    			{
-					if (s_retry_num < MAXIMUM_RETRY)
-					{
-						esp_wifi_connect();
-						s_retry_num++;
-						ESP_LOGI(TAG, "retry to connect to the AP");
+				if(!strncmp((const char *)sta.sta[i].mac, (const char *)event->mac, 6)) {
+					if(sta.sta[i].rssi <= CONFIG_APP_RSSI_THRESHOLD_JOIN) {
+						ESP_LOGI(TAG, "RSSI less than RSSI threshold");
+						esp_wifi_deauth_sta(event->aid);
 					}
+				}
+			}
+		}
+		else if(bits & WIFI_EVENT_AP_STADISCONNECTED_BIT) {
 
-					ESP_LOGI(TAG,"connect to the AP fail");
-
-    				break;
-    			}
-    		}
-
-        	break;
-    	}
-
-        case WIFI_EVENT_STA_WPS_ER_SUCCESS:
-        {
-            ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_SUCCESS");
-            {
-                wifi_event_sta_wps_er_success_t * event = ( wifi_event_sta_wps_er_success_t * ) event_data;
-                int i;
-
-                if (event) {
-                    s_ap_creds_num = event->ap_cred_cnt;
-                    for (i = 0; i < s_ap_creds_num; i++) {
-                        memcpy(wps_ap_creds[i].sta.ssid, event->ap_cred[i].ssid,
-                               sizeof(event->ap_cred[i].ssid));
-                        memcpy(wps_ap_creds[i].sta.password, event->ap_cred[i].passphrase,
-                               sizeof(event->ap_cred[i].passphrase));
-                    }
-                    /* If multiple AP credentials are received from WPS, connect with first one */
-                    ESP_LOGI(TAG, "Connecting to SSID: %s, Passphrase: %s",
-                             wps_ap_creds[0].sta.ssid, wps_ap_creds[0].sta.password);
-                    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wps_ap_creds[0]) );
-                }
-                /*
-                 * If only one AP credential is received from WPS, there will be no event data and
-                 * esp_wifi_set_config() is already called by WPS modules for backward compatibility
-                 * with legacy apps. So directly attempt connection here.
-                 */
-                ESP_ERROR_CHECK(esp_wifi_wps_disable());
-                ESP_ERROR_CHECK(esp_wifi_connect());
-            }
-            break;
-        }
-
-        case WIFI_EVENT_STA_WPS_ER_FAILED:
-        {
-            ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_FAILED");
-            ESP_ERROR_CHECK ( esp_wifi_wps_disable () );
-            ESP_ERROR_CHECK ( esp_wifi_wps_enable ( &wps_config ) );
-            ESP_ERROR_CHECK ( esp_wifi_wps_start ( 0 ) );
-            break;
-        }
-
-        case WIFI_EVENT_STA_WPS_ER_TIMEOUT:
-        {
-            ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_TIMEOUT");
-            ESP_ERROR_CHECK ( esp_wifi_wps_disable () );
-            ESP_ERROR_CHECK ( esp_wifi_connect () );
-            break;
-        }
-
-        case WIFI_EVENT_STA_WPS_ER_PBC_OVERLAP:
-        {
-        	ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_PBC_OVERLAP");
-        	break;
-        }
-    }
+		}
+		else {
+			ESP_LOGI(TAG, "Other event");
+		}
+	}
 }
 
-static void ip_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
-{
-    switch ( event_id )
-    {
-		case IP_EVENT_STA_GOT_IP:
-		{
-			ESP_LOGI ( TAG, "IP_EVENT_STA_GOT_IP" );
-			ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-			ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-			s_retry_num = 0;
+static void ipEventsTask(void * arg) {
+	EventBits_t bits;
+	EventBits_t bitsWaitFor = (IP_EVENT_STA_GOT_IP_BIT);
 
-			ws2812_led_set_hsv ( 110, 100, 25 );
+	for(;;) {
+		/* Wait until some bit is set */
+		bits = xEventGroupWaitBits(wifi.ipEventGroup, bitsWaitFor, pdTRUE, pdFALSE, portMAX_DELAY);
 
-			break;
+		if(bits & IP_EVENT_STA_GOT_IP_BIT) {
+			ip_event_got_ip_t * event = (ip_event_got_ip_t *)wifi.ipEventData;
+
+			ESP_LOGI(TAG, "Connected with IP Address:" IPSTR, IP2STR(&event->ip_info.ip));
+
+		    /* Initialize NAT */
+		    ip_napt_enable ( htonl ( 0xC0A80401 ), 1 );	/* 192.168.4.1 */
+		    ESP_LOGI ( TAG, "NAT is enabled" );
+
+		    ws2812_led_set_rgb(127, 0, 0);	/* Green */
+
+		    updateLed = 1;
 		}
-
-		case IP_EVENT_STA_LOST_IP:
-		{
-			ESP_LOGI ( TAG, "IP_EVENT_STA_LOST_IP" );
-
-			break;
+		else {
+			ESP_LOGI(TAG, "Other event");
 		}
-
-		case IP_EVENT_AP_STAIPASSIGNED:
-		{
-			ESP_LOGI ( TAG, "IP_EVENT_AP_STAIPASSIGNED" );
-			ip_event_ap_staipassigned_t * event = (ip_event_ap_staipassigned_t*) event_data;
-			ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip));
-			break;
-		}
-    }
+	}
 }
 
-static void wifi_init_apsta(void)
-{
-	ip_addr_t dnsserver;
+static void provEventsTask(void * arg) {
+	EventBits_t bits;
+	EventBits_t bitsWaitFor = (WIFI_PROV_START_BIT |
+							   WIFI_PROV_CRED_RECV_BIT |
+							   WIFI_PROV_CRED_FAIL_BIT |
+							   WIFI_PROV_CRED_SUCCESS_BIT |
+							   WIFI_PROV_END_BIT |
+							   WIFI_PROV_DEINIT_BIT);
 
-    ESP_ERROR_CHECK ( esp_netif_init () );
-    ESP_ERROR_CHECK ( esp_event_loop_create_default () );
-    esp_netif_create_default_wifi_ap ();
-    esp_netif_create_default_wifi_sta ();
+	for(;;) {
+		/* Wait until some bit is set */
+		bits = xEventGroupWaitBits(wifi.provEventGroup, bitsWaitFor, pdTRUE, pdFALSE, portMAX_DELAY);
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK ( esp_wifi_init ( &cfg ) );
+		if(bits & WIFI_PROV_START_BIT) {
+			ESP_LOGI(TAG, "Provisioning started");
 
-    esp_wifi_set_event_mask ( WIFI_EVENT_MASK_NONE );
-    esp_wifi_set_bandwidth ( WIFI_MODE_APSTA, WIFI_BW_HT40 );
+			ws2812_led_set_rgb(0, 0, 127);	/* Blue */
+		}
+		else if(bits & WIFI_PROV_CRED_RECV_BIT) {
+			wifi_sta_config_t * wifi_sta_cfg = (wifi_sta_config_t *)wifi.provEventData;
+			ESP_LOGI(TAG, "Credentials received, SSID: %s & Password: %s", (const char *) wifi_sta_cfg->ssid, (const char *) wifi_sta_cfg->password);
+		}
+		else if(bits & WIFI_PROV_CRED_SUCCESS_BIT) {
+			ESP_LOGI(TAG, "Provisioning successful");
+		}
+		else if(bits & WIFI_PROV_END_BIT) {
+			/* De-initialize manager once provisioning is finished */
+			wifi_prov_mgr_deinit();
+		}
+		else if(bits & WIFI_PROV_CRED_FAIL_BIT) {
+			esp_restart();	/* Restart the device */
+		}
+		else if(bits & WIFI_PROV_DEINIT_BIT) {
+			char * ssid = CONFIG_WIFI_AP_SSID;
+			ssid = malloc((strlen(CONFIG_WIFI_AP_SSID) + 7 + 1) * sizeof(* ssid));
 
-    ESP_ERROR_CHECK ( esp_event_handler_instance_register ( WIFI_EVENT,
-    														ESP_EVENT_ANY_ID,
-															&wifi_event_handler,
-															NULL,
-															NULL ) );
+			if(ssid == NULL) {
+				ssid = CONFIG_WIFI_AP_SSID;
+			}
+			else {
+			    uint8_t eth_mac[6];
+			    esp_wifi_get_mac(WIFI_IF_STA, eth_mac);
+			    sprintf(ssid, "%s_%02X%02X%02X", CONFIG_WIFI_AP_SSID, eth_mac[3], eth_mac[4], eth_mac[5]);
+			}
 
-    ESP_ERROR_CHECK ( esp_event_handler_instance_register ( IP_EVENT,
-    														ESP_EVENT_ANY_ID,
-															&ip_event_handler,
-															NULL,
-															NULL));
+		    wifi_config_t wifi_config_ap = {
+		    		.ap = {
+							.ssid_len = strlen(ssid),
+							.channel = CONFIG_WIFI_AP_CHANNEL,
+							.password = CONFIG_WIFI_AP_PASS,
+							.max_connection = CONFIG_WIFI_AP_MAX_STA_CONN,
+							.authmode = WIFI_AUTH_OPEN
+		            },
+		    };
+		    strcpy((char *)wifi_config_ap.ap.ssid, ssid);
 
-    wifi_config_t wifi_config_ap = {
-        .ap = {
-            .ssid = SOFTAP_SSID,
-            .ssid_len = strlen(SOFTAP_SSID),
-            .channel = SOFTAP_CHANNEL,
-            .password = SOFTAP_PASS,
-            .max_connection = SOFTAP_MAX_STA_CONN,
-            .authmode = WIFI_AUTH_OPEN
-        },
-    };
+			ESP_ERROR_CHECK(esp_wifi_stop());
+			ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+			ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+			ip_addr_t dnsserver;
+		    dnsserver.u_addr.ip4.addr = htonl ( MY_DNS_IP_ADDR );
+		    dhcps_offer_t dhcps_dns_value = OFFER_DNS;
+		    dhcps_set_option_info ( 6, &dhcps_dns_value, sizeof( dhcps_dns_value ) );
+		    dnsserver.type = IPADDR_TYPE_V4;
+		    dhcps_dns_setserver ( &dnsserver );
+			ESP_ERROR_CHECK(esp_wifi_start());
+			ESP_ERROR_CHECK(esp_wifi_connect());
 
-    ESP_ERROR_CHECK ( esp_wifi_set_mode ( WIFI_MODE_APSTA ) );
-    ESP_ERROR_CHECK ( esp_wifi_set_config ( ESP_IF_WIFI_AP, &wifi_config_ap ) );
-
-    /**/
-    dhcps_offer_t dhcps_dns_value = OFFER_DNS;
-    dhcps_set_option_info ( 6, &dhcps_dns_value, sizeof( dhcps_dns_value ) );
-
-    /**/
-    dnsserver.u_addr.ip4.addr = htonl ( MY_DNS_IP_ADDR );
-    dnsserver.type = IPADDR_TYPE_V4;
-    dhcps_dns_setserver ( &dnsserver );
-
-    ESP_ERROR_CHECK ( esp_wifi_start () );
+			free(ssid);
+		}
+		else {
+			ESP_LOGI(TAG, "Other event");
+		}
+	}
 }
 
-static void disconnect_task ( void * arg )
-{
-	wifi_sta_list_t sta = { 0 };
+static void buttonEventsTask(void * arg) {
+	EventBits_t bits;
+	const EventBits_t bitsWaitFor = (BUTTON_SHORT_PRESS_BIT |
+									 BUTTON_MEDIUM_PRESS_BIT |
+									 BUTTON_LONG_PRESS_BIT);
 
-	for ( ;; )
+	for(;;)
 	{
-		esp_wifi_ap_get_sta_list ( &sta );
+		/* Wait until some bit is set */
+		bits = xEventGroupWaitBits(button.eventGroup, bitsWaitFor, pdTRUE, pdFALSE, portMAX_DELAY);
 
-		for ( uint8_t i = 0; i < sta.num; i++ ) {
-			ESP_LOGI ( TAG, "station "MACSTR", RSSI: %d",
-					MAC2STR ( sta.sta [ i ].mac ),
-					sta.sta [ i ].rssi );
+		if(bits & BUTTON_SHORT_PRESS_BIT)
+			ESP_LOGI(TAG, "BUTTON_SHORT_PRESS_BIT set!");
 
-			if ( sta.sta [ i ].rssi <= RSSI_THRESHOLD * 3 )
-			{
+		else if(bits & BUTTON_MEDIUM_PRESS_BIT)
+		{
+			ESP_LOGI(TAG, "BUTTON_MEDIUM_PRESS_BIT set!");
+
+			/* Erase any stored Wi-Fi credential  */
+			ESP_LOGI(TAG, "Erasing Wi-Fi credentials");
+
+			esp_err_t ret;
+
+			nvs_handle_t nvs_handle;
+			ret = nvs_open("nvs.net80211", NVS_READWRITE, &nvs_handle);
+
+			if(ret == ESP_OK)
+				nvs_erase_all(nvs_handle);
+
+			/* Close NVS */
+			ret = nvs_commit(nvs_handle);
+			nvs_close(nvs_handle);
+
+			if(ret == ESP_OK)
+				/* Restart device */
+				esp_restart();
+		}
+		else if(bits & BUTTON_LONG_PRESS_BIT)
+			ESP_LOGI(TAG, "BUTTON_LONG_PRESS_BIT set!");
+		else
+			ESP_LOGI(TAG, "Button unexpected Event");
+	}
+}
+
+static esp_err_t nvsInit(void) {
+    esp_err_t ret = nvs_flash_init();
+
+    if(ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
+    }
+
+    return ret;
+}
+
+static void disconnectClientTask(void * arg) {
+	wifi_sta_list_t sta;
+
+//	gpio_config_t gpio;
+//	gpio.intr_type = GPIO_INTR_DISABLE;
+//	gpio.mode = GPIO_MODE_OUTPUT;
+//	gpio.pin_bit_mask = (1ULL << GPIO_NUM_8);
+//	gpio.pull_down_en = GPIO_PULLDOWN_DISABLE;
+//	gpio.pull_up_en = GPIO_PULLUP_DISABLE;
+//	gpio_config(&gpio);
+//
+//	uint8_t level = 0;
+
+	for(;;) {
+		esp_wifi_ap_get_sta_list(&sta);
+
+		/* Ask for stations RSSI and drop out if that is less than
+		 * CONFIG_APP_RSSI_THRESHOLD_DROP_OUT */
+		for(uint8_t i = 0; i < sta.num; i++) {
+			ESP_LOGI(TAG, "station "MACSTR", RSSI: %d", MAC2STR (sta.sta[i].mac), sta.sta[i].rssi);
+
+			if(sta.sta[i].rssi <= CONFIG_APP_RSSI_THRESHOLD_DROP_OUT) {
 				uint16_t aid = 0;
-				esp_wifi_ap_get_sta_aid ( sta.sta [ i ].mac, &aid );
-				esp_wifi_deauth_sta ( aid );
-				ESP_LOGI ( TAG, "Good bye!" );
+				esp_wifi_ap_get_sta_aid(sta.sta[i].mac, &aid);
+				ESP_LOGI(TAG, "Good bye" MACSTR, MAC2STR(sta.sta[i].mac));
+				esp_wifi_deauth_sta(aid);
 			}
 		}
 
-		vTaskDelay ( pdMS_TO_TICKS( 3000 ) );
-	}
-}
-
-static void wps_task ( void * arg )
-{
-	uint32_t event_to_process;
-
-	ESP_LOGI( TAG, "Configuring WPS button GPIO..." );
-	gpio_config_t gpio_conf;
-	gpio_conf.pin_bit_mask = 1ULL << GPIO_NUM_0;
-	gpio_conf.mode = GPIO_MODE_INPUT;
-	gpio_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-	gpio_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-	gpio_conf.intr_type = GPIO_INTR_NEGEDGE;
-	gpio_config( &gpio_conf );
-	ESP_LOGI( TAG, "WPS button GPIO configured!" );
-
-	gpio_install_isr_service ( 0 );
-	gpio_isr_handler_add( GPIO_NUM_0, give_notification, ( void * ) wps_task_handle );
-
-	for ( ;; )
-	{
-		event_to_process = ulTaskNotifyTake ( pdTRUE, portMAX_DELAY );
-
-		if ( event_to_process )
-		{
-			ESP_LOGI ( TAG, "WPS started" );
-
-			ESP_ERROR_CHECK ( esp_wifi_wps_disable () );
-			ESP_ERROR_CHECK ( esp_wifi_wps_enable ( &wps_config ) );
-			ESP_ERROR_CHECK ( esp_wifi_wps_start ( 0 ) );
-
-			ws2812_led_set_hsv ( 12, 100, 25 );
+		/* Change LED color according the station list */
+		if(updateLed) {
+			if(sta.num < CONFIG_WIFI_AP_MAX_STA_CONN) {
+				ws2812_led_set_rgb(127, 0, 0);	/* Green */
+			}
+			else if(sta.num == CONFIG_WIFI_AP_MAX_STA_CONN) {
+				ws2812_led_set_rgb(82, 127, 0);	/* Orange */
+			}
 		}
+
+//		gpio_set_level(GPIO_NUM_8, 1);
+//		vTaskDelay(pdMS_TO_TICKS(100));
+//		gpio_set_level(GPIO_NUM_8, 0);
+
+		/* Wait 3 seg to update */
+		vTaskDelay(pdMS_TO_TICKS(3000));
 	}
 }
 
-static void IRAM_ATTR give_notification ( void * arg )
+static void tryToReconnectTask(void * arg)
 {
-	TaskHandle_t * task_handle = ( TaskHandle_t * ) arg;
-	BaseType_t higher_priority_task_woken = pdFALSE;
+	TickType_t last_time_wake = xTaskGetTickCount();
 
-	vTaskNotifyGiveFromISR ( task_handle, &higher_priority_task_woken );
+	for(;;)
+	{
+		/* Try connecting to Wi-Fi router using stored credentials. If connection is successful
+		 * then the task delete itself, in other cases this function is executed again*/
+		ESP_LOGI(TAG, "Unable to connect. Retrying...");
+		esp_wifi_connect();
 
-	portYIELD_FROM_ISR ( higher_priority_task_woken );
-}
-
-esp_err_t rgb_init ( void )
-{
-    esp_err_t err = ws2812_led_init();
-    if (err != ESP_OK) {
-        return err;
-    }
-    ws2812_led_set_hsv ( 1, 100, 25 );
-    return ESP_OK;
+		/* Wait 20 sec to try reconnecting */
+		vTaskDelayUntil(&last_time_wake, pdMS_TO_TICKS(CONFIG_APP_RECONNECTION_TIME));
+	}
 }
 
 /* end of file ---------------------------------------------------------------*/
