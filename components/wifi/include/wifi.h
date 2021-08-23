@@ -84,7 +84,6 @@ extern "C" {
 typedef void (* wifiEventHandler_t)(void *, esp_event_base_t, int32_t, void *);
 typedef void (* ipEventHandler_t)(void *, esp_event_base_t, int32_t, void *);
 typedef void (* provEventHandler_ts)(void *, esp_event_base_t, int32_t, void *);
-
 typedef struct
 {
 	EventGroupHandle_t wifiEventGroup;
@@ -96,7 +95,7 @@ typedef struct
 	void * wifiEventData;
 	void * ipEventData;
 	void * provEventData;
-} wifi_t;
+} wifi_t; /* todo: write descriptions */
 
 /* external data declaration -------------------------------------------------*/
 

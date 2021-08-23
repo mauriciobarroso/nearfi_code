@@ -43,6 +43,7 @@ esp_err_t wifi_Init(wifi_t * const me) {
 		ESP_LOGI(TAG, "Event group successful");
 	}
 
+
 	/* Create IP event group */
 	me->ipEventGroup = xEventGroupCreate();
 
@@ -74,8 +75,8 @@ esp_err_t wifi_Init(wifi_t * const me) {
     esp_netif_create_default_wifi_ap();
 
     /* Register event handlers */
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifiEventHandler, (void *)me, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, ipEventHandler, (void *)me, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, me->wifiEventHandler, (void *)me, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, me->ipEventHandler, (void *)me, NULL));
 
     /* Initialize Wi-Fi */
     wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
@@ -114,7 +115,7 @@ esp_err_t wifi_Init(wifi_t * const me) {
 
     /* Initialize provisioning manager */
 #ifdef CONFIG_WIFI_PROV_ENABLE
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, provEventHandler, (void *)me, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, me->provEventHandler, (void *)me, NULL));
 
     wifi_prov_mgr_config_t prov_config = {
     		.scheme = wifi_prov_scheme_softap,
@@ -263,6 +264,9 @@ static void wifiEventHandler(void * arg, esp_event_base_t event_base, int event_
 
 	case WIFI_EVENT_AP_STACONNECTED:
 		ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED_BIT");
+		wifi_event_ap_staconnected_t * event = (wifi_event_ap_staconnected_t *)wifi->wifiEventData;
+		ESP_LOGI(TAG, "station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
+
 		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_AP_STACONNECTED_BIT);
 		break;
 
