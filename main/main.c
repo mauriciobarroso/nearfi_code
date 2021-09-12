@@ -105,14 +105,25 @@ void app_main(void)
 
 /* Utils */
 static esp_err_t nvsInit(void) {
-    esp_err_t ret = nvs_flash_init();
+	esp_err_t ret;
 
-    if(ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
-    }
+	const esp_partition_t * partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS, NULL);
 
-    return ret;
+	if(partition != NULL)
+	{
+		nvs_sec_cfg_t nvs_sec_cfg;
+
+		if(nvs_flash_read_security_cfg(partition, &nvs_sec_cfg) != ESP_OK)
+			ESP_ERROR_CHECK(nvs_flash_generate_keys(partition, &nvs_sec_cfg));
+
+		/* Initialize secure NVS */
+//		ESP_ERROR_CHECK(nvs_flash_erase());	/* Erase any stored Wi-Fi credential  */
+		ret = nvs_flash_secure_init(&nvs_sec_cfg);
+	}
+	else
+		return ESP_FAIL;
+
+	return ret;
 }
 
 static esp_err_t beepSuccess(void) {
