@@ -11,14 +11,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wps.h"
+#include "esp_https_ota.h"
 
 #include "driver/gpio.h"
-
 #include "nvs_flash.h"
 
 #include "lwip/err.h"
@@ -30,10 +29,10 @@
 #include "wifi.h"
 #include "ws2812_led.h"
 
-
 /* macros --------------------------------------------------------------------*/
 
 #define DNS_IP_ADDR	0x08080808	/* 8.8.8.8 */
+#define OTA_URL		"https://esp32s2-ota-updates.s3.amazonaws.com/NearFi.bin"
 
 /* typedef -------------------------------------------------------------------*/
 
@@ -49,7 +48,14 @@ static buzzer_t buzzer;
 
 /* Application variables */
 static TaskHandle_t tryToReconnectHandle = NULL;
+static TaskHandle_t otaHandle = NULL;
 static uint8_t updateLed = 0;
+
+/* Certificates */
+extern const uint8_t server_cert_pem_start[] asm("_binary_server_pem_start");
+//extern const uint8_t device_id_start[] asm("_binary_id_txt_start");
+//extern const uint8_t private_start[] asm("_binary_private_pem_key_start");
+//extern const uint8_t certificate_start[] asm("_binary_certificate_pem_crt_start");
 
 /* function declaration ------------------------------------------------------*/
 
@@ -63,6 +69,7 @@ static esp_err_t beepError(void);
 static void buttonEventsTask(void * arg);
 static void disconnectClientTask(void * arg);
 static void tryToReconnectTask(void * arg);
+static void otaTask(void * arg);
 
 /* Event handlers */
 static void wifiEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
@@ -71,8 +78,7 @@ static void provEventHandler(void * arg, esp_event_base_t event_base, int32_t ev
 
 /* main ----------------------------------------------------------------------*/
 
-void app_main(void)
-{
+void app_main(void) {
 	ESP_LOGI(TAG, "Initializing components instances");
 
     /* Initialize NVS */
@@ -80,7 +86,7 @@ void app_main(void)
 
 	/* Initialize WS2812B LED */
 	ESP_ERROR_CHECK(ws2812_led_init());
-	ws2812_led_set_rgb(63, 0, 63);	/* Purple */
+	ws2812_led_set_rgb(0, 63, 63);	/* Purple */
 
 	/* Initialize Button instance */
 	ESP_ERROR_CHECK(button_Init(&button));
@@ -99,6 +105,7 @@ void app_main(void)
 
 	xTaskCreate(buttonEventsTask, "Button Events Task", configMINIMAL_STACK_SIZE * 4, NULL, tskIDLE_PRIORITY + 2, NULL);
 	xTaskCreate(disconnectClientTask, "Disconnect Client Task", configMINIMAL_STACK_SIZE * 4, NULL, tskIDLE_PRIORITY + 1, NULL);
+	xTaskCreate(otaTask, "OTA Task", configMINIMAL_STACK_SIZE * 6, NULL, tskIDLE_PRIORITY + 3, &otaHandle);
 }
 
 /* function definition -------------------------------------------------------*/
@@ -120,8 +127,67 @@ static esp_err_t nvsInit(void) {
 //		ESP_ERROR_CHECK(nvs_flash_erase());	/* Erase any stored Wi-Fi credential  */
 		ret = nvs_flash_secure_init(&nvs_sec_cfg);
 	}
-	else
+	else {
 		return ESP_FAIL;
+	}
+
+	if(ret == ESP_OK)
+	{
+		/* NVS variables */
+		nvs_handle_t nvs_handle;
+		char * data = NULL;
+		size_t data_len = 0;
+
+		if(nvs_open("settings", NVS_READWRITE, &nvs_handle) == ESP_OK) {
+			ESP_LOGI(TAG, "open settings");
+
+			/* device id */
+			if(nvs_get_str(nvs_handle, "deviceID", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
+				ESP_LOGI(TAG, "ESP_ERR_NVS_NOT_FOUND");
+			}
+			else {
+				ESP_LOGI(TAG, "Wrote!");
+			}
+
+			data = malloc(data_len + sizeof(uint32_t));
+			nvs_get_str(nvs_handle, "deviceID", data, &data_len);
+			ESP_LOGI(TAG, "deviceID:%.*s", data_len, data);
+			free(data);
+
+			/* thing cert */
+			if(nvs_get_str(nvs_handle, "thingCert", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
+				ESP_LOGI(TAG, "ESP_ERR_NVS_NOT_FOUND");
+			}
+			else {
+				ESP_LOGI(TAG, "Wrote!");
+			}
+
+			data = malloc(data_len + sizeof(uint32_t));
+			nvs_get_str(nvs_handle, "thingCert", data, &data_len);
+			ESP_LOGI(TAG, "thingCert:%.*s", data_len, data);
+			free(data);
+
+			/* private key */
+			if(nvs_get_str(nvs_handle, "privateKey", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
+				ESP_LOGI(TAG, "ESP_ERR_NVS_NOT_FOUND");
+			}
+			else {
+				ESP_LOGI(TAG, "Wrote!");
+			}
+
+			data = malloc(data_len + sizeof(uint32_t));
+			nvs_get_str(nvs_handle, "privateKey", data, &data_len);
+			ESP_LOGI(TAG, "privateKey:%.*s", data_len, data);
+			free(data);
+		}
+		else {
+			ESP_LOGI(TAG, "not open");
+		}
+
+		/* Close NVS */
+		nvs_commit(nvs_handle);
+		nvs_close(nvs_handle);
+	}
 
 	return ret;
 }
@@ -170,9 +236,10 @@ static void buttonEventsTask(void * arg) {
 		if(bits & BUTTON_SHORT_PRESS_BIT) {
 			ESP_LOGI(TAG, "BUTTON_SHORT_PRESS_BIT set!");
 
-			beepSuccess();
+//			beepSuccess();
+			xTaskNotifyGive(otaHandle);
 
-			esp_restart();
+//			esp_restart();
 		}
 
 		else if(bits & BUTTON_MEDIUM_PRESS_BIT) {
@@ -196,9 +263,10 @@ static void buttonEventsTask(void * arg) {
 			ret = nvs_commit(nvs_handle);
 			nvs_close(nvs_handle);
 
-			if(ret == ESP_OK)
+			if(ret == ESP_OK) {
 				/* Restart device */
 				esp_restart();
+			}
 		}
 		else if(bits & BUTTON_LONG_PRESS_BIT) {
 			ESP_LOGI(TAG, "BUTTON_LONG_PRESS_BIT set!");
@@ -231,7 +299,7 @@ static void disconnectClientTask(void * arg) {
 		/* Change LED color according the station list */
 		if(updateLed) {
 			if(sta.num < CONFIG_WIFI_AP_MAX_STA_CONN) {
-				ws2812_led_set_rgb(0, 127, 0);	/* Green */
+			    ws2812_led_set_rgb(127, 0, 0);	/* Green */
 			}
 			else if(sta.num == CONFIG_WIFI_AP_MAX_STA_CONN) {
 				ws2812_led_set_rgb(82, 127, 0);	/* Orange */
@@ -259,6 +327,37 @@ static void tryToReconnectTask(void * arg)
 	}
 }
 
+static void otaTask(void * arg) {
+	uint32_t event_to_process;
+
+
+	for(;;) {
+		ESP_LOGI(TAG, "ERROR");
+
+		event_to_process = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+		if(event_to_process != 0) {
+			ESP_LOGI(TAG, "Starting OTA update");
+			ws2812_led_set_hsv(60, 100, 25);	/* Set LED yellow */
+
+			esp_http_client_config_t config = {
+					.url = OTA_URL,
+					.cert_pem = (char *)server_cert_pem_start,
+			};
+
+			esp_err_t ret = esp_https_ota(&config);
+
+			if(ret == ESP_OK) {
+				esp_restart();
+			}
+			else
+			{
+				ESP_LOGE(TAG, "Firmware upgrade failed");
+			    ws2812_led_set_rgb(127, 0, 0);	/* Green */
+			}
+		}
+	}
+}
 
 /* Event handlers */
 static void wifiEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data) {
@@ -280,7 +379,7 @@ static void wifiEventHandler(void * arg, esp_event_base_t event_base, int32_t ev
 
 			updateLed = 0;
 
-	        ws2812_led_set_rgb(127, 0, 0);	/* Red */
+	        ws2812_led_set_rgb(0, 127, 0);	/* Red */
 
 	        break;
 		}
@@ -305,7 +404,7 @@ static void wifiEventHandler(void * arg, esp_event_base_t event_base, int32_t ev
 						ESP_LOGI(TAG, "RSSI less than RSSI threshold");
 						esp_wifi_deauth_sta(event->aid);
 
-						beepFail();
+//						beepFail();
 					}
 					else {
 						beepSuccess();
@@ -333,7 +432,7 @@ static void ipEventHandler(void * arg, esp_event_base_t event_base, int32_t even
 			ip_napt_enable(htonl(0xC0A80401), 1);	/* 192.168.4.1 */
 			ESP_LOGI (TAG, "NAT is enabled");
 
-			ws2812_led_set_rgb(0, 127, 0);	/* Green */
+		    ws2812_led_set_rgb(127, 0, 0);	/* Green */
 
 			updateLed = 1;
 
@@ -382,7 +481,25 @@ static void provEventHandler(void * arg, esp_event_base_t event_base, int32_t ev
 		case WIFI_PROV_CRED_FAIL: {
 			beepFail();
 
-			esp_restart();	/* Restart the device */
+			/* Erase any stored Wi-Fi credential  */
+			ESP_LOGI(TAG, "Erasing Wi-Fi credentials");
+
+			esp_err_t ret;
+
+			nvs_handle_t nvs_handle;
+			ret = nvs_open("nvs.net80211", NVS_READWRITE, &nvs_handle);
+
+			if(ret == ESP_OK)
+				nvs_erase_all(nvs_handle);
+
+			/* Close NVS */
+			ret = nvs_commit(nvs_handle);
+			nvs_close(nvs_handle);
+
+			if(ret == ESP_OK) {
+				/* Restart device */
+				esp_restart();
+			}
 
 			break;
 		}
