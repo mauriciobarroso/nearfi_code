@@ -19,7 +19,7 @@ menu "Wifi Configuration"
 		
     config WIFI_AP_SSID
         string "AP SSID"
-        default "esp32s2_" 
+        default "esp32s2" 
         depends on WIFI_AP || WIFI_APSTA
         help
             Access point target SSID.
