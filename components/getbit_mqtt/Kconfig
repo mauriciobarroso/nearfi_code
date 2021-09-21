@@ -1,0 +1,43 @@
+menu "MQTT Configuration"
+
+	config BITEC_MQTT_BROKER_URL
+		string "MQTT broker URL"
+		default "mqtts://a4bdl1178z00a-ats.iot.us-east-1.amazonaws.com:8883"
+		help
+    		URL for the MQTT broker. This must contain the number port and protol used.
+    		
+	config BITEC_MQTT_LWT_ENABLE
+		bool "Enable LWT"
+		default y
+		help
+			Enable LWT (Last Will and Testament).
+			
+	config BITEC_MQTT_LWT_TOPIC
+		string "LWT topic"
+		default "disconnected/"
+		depends on BITEC_MQTT_LWT_ENABLE
+		help
+			Set LWT topic.
+			
+	config BITEC_MQTT_LWT_MESSAGE
+		string "LWT message"
+		default "disconnected"
+		depends on BITEC_MQTT_LWT_ENABLE
+		help
+			Set LWT message.
+			
+	config BITEC_MQTT_LWT_QOS
+		int "LWT QoS"
+		default 0
+		depends on BITEC_MQTT_LWT_ENABLE
+		help
+			Set LWT QoS.
+        
+	config BITEC_MQTT_LWT_LENGHT
+		int "LWT message lenght"
+		default 12
+		depends on BITEC_MQTT_LWT_ENABLE
+		help
+			Set LWT message lenght.
+
+endmenu
