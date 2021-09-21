@@ -27,6 +27,7 @@
 #include "button.h"
 #include "buzzer.h"
 #include "wifi.h"
+#include "mqtt.h"
 #include "ws2812_led.h"
 
 /* macros --------------------------------------------------------------------*/
@@ -43,6 +44,7 @@ static const char * TAG = "app";
 
 /* Components instances */
 static wifi_t wifi;
+static mqtt_t mqtt;
 static button_t button;
 static buzzer_t buzzer;
 
@@ -53,9 +55,10 @@ static uint8_t updateLed = 0;
 
 /* Certificates */
 extern const uint8_t server_cert_pem_start[] asm("_binary_server_pem_start");
-//extern const uint8_t device_id_start[] asm("_binary_id_txt_start");
-//extern const uint8_t private_start[] asm("_binary_private_pem_key_start");
-//extern const uint8_t certificate_start[] asm("_binary_certificate_pem_crt_start");
+extern const uint8_t awsCert[] asm("_binary_aws_pem_start");
+static char * deviceID = NULL;
+static char * deviceCert = NULL;
+static char * deviceKey = NULL;
 
 /* function declaration ------------------------------------------------------*/
 
@@ -75,6 +78,7 @@ static void otaTask(void * arg);
 static void wifiEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
 static void ipEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
 static void provEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
+static void mqttEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data);
 
 /* main ----------------------------------------------------------------------*/
 
@@ -100,6 +104,14 @@ void app_main(void) {
 	wifi.provEventHandler = provEventHandler;
 	ESP_ERROR_CHECK(wifi_Init(&wifi));
 
+	/* Initialize MQTT instance */
+	mqtt.config.uri = CONFIG_BITEC_MQTT_BROKER_URL;
+	mqtt.config.client_cert_pem = (const char *)deviceCert;
+	mqtt.config.client_key_pem = (const char *)deviceKey;
+	mqtt.config.cert_pem = (const char *)awsCert;
+	mqtt.mqttEventHandler = mqttEventHandler;
+//	mqtt_Init(&mqtt); /* fixme: enabling MQTT reduces connection performance */
+
 	/* Create RTOS tasks */
 	ESP_LOGI(TAG, "Creating RTOS tasks");
 
@@ -124,7 +136,6 @@ static esp_err_t nvsInit(void) {
 			ESP_ERROR_CHECK(nvs_flash_generate_keys(partition, &nvs_sec_cfg));
 
 		/* Initialize secure NVS */
-//		ESP_ERROR_CHECK(nvs_flash_erase());	/* Erase any stored Wi-Fi credential  */
 		ret = nvs_flash_secure_init(&nvs_sec_cfg);
 	}
 	else {
@@ -135,13 +146,13 @@ static esp_err_t nvsInit(void) {
 	{
 		/* NVS variables */
 		nvs_handle_t nvs_handle;
-		char * data = NULL;
 		size_t data_len = 0;
 
+		/* Get device information */
 		if(nvs_open("settings", NVS_READWRITE, &nvs_handle) == ESP_OK) {
 			ESP_LOGI(TAG, "open settings");
 
-			/* device id */
+			/* Device ID */
 			if(nvs_get_str(nvs_handle, "deviceID", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
 				ESP_LOGI(TAG, "ESP_ERR_NVS_NOT_FOUND");
 			}
@@ -149,12 +160,11 @@ static esp_err_t nvsInit(void) {
 				ESP_LOGI(TAG, "Wrote!");
 			}
 
-			data = malloc(data_len + sizeof(uint32_t));
-			nvs_get_str(nvs_handle, "deviceID", data, &data_len);
-			ESP_LOGI(TAG, "deviceID:%.*s", data_len, data);
-			free(data);
+			deviceID = malloc(data_len + sizeof(uint32_t));
+			nvs_get_str(nvs_handle, "deviceID", deviceID, &data_len);
+			ESP_LOGI(TAG, "deviceID:%.*s", data_len, deviceID);
 
-			/* thing cert */
+			/* Device certificate */
 			if(nvs_get_str(nvs_handle, "thingCert", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
 				ESP_LOGI(TAG, "ESP_ERR_NVS_NOT_FOUND");
 			}
@@ -162,12 +172,11 @@ static esp_err_t nvsInit(void) {
 				ESP_LOGI(TAG, "Wrote!");
 			}
 
-			data = malloc(data_len + sizeof(uint32_t));
-			nvs_get_str(nvs_handle, "thingCert", data, &data_len);
-			ESP_LOGI(TAG, "thingCert:%.*s", data_len, data);
-			free(data);
+			deviceCert = malloc(data_len + sizeof(uint32_t));
+			nvs_get_str(nvs_handle, "thingCert", deviceCert, &data_len);
+			ESP_LOGI(TAG, "thingCert:%.*s", data_len, deviceCert);
 
-			/* private key */
+			/* Private key */
 			if(nvs_get_str(nvs_handle, "privateKey", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
 				ESP_LOGI(TAG, "ESP_ERR_NVS_NOT_FOUND");
 			}
@@ -175,10 +184,9 @@ static esp_err_t nvsInit(void) {
 				ESP_LOGI(TAG, "Wrote!");
 			}
 
-			data = malloc(data_len + sizeof(uint32_t));
-			nvs_get_str(nvs_handle, "privateKey", data, &data_len);
-			ESP_LOGI(TAG, "privateKey:%.*s", data_len, data);
-			free(data);
+			deviceKey = malloc(data_len + sizeof(uint32_t));
+			nvs_get_str(nvs_handle, "privateKey", deviceKey, &data_len);
+			ESP_LOGI(TAG, "privateKey:%.*s", data_len, deviceKey);
 		}
 		else {
 			ESP_LOGI(TAG, "not open");
@@ -236,15 +244,6 @@ static void buttonEventsTask(void * arg) {
 		if(bits & BUTTON_SHORT_PRESS_BIT) {
 			ESP_LOGI(TAG, "BUTTON_SHORT_PRESS_BIT set!");
 
-//			beepSuccess();
-			xTaskNotifyGive(otaHandle);
-
-//			esp_restart();
-		}
-
-		else if(bits & BUTTON_MEDIUM_PRESS_BIT) {
-			ESP_LOGI(TAG, "BUTTON_MEDIUM_PRESS_BIT set!");
-
 			/* Activate buzzer */
 			beepError();
 
@@ -267,6 +266,12 @@ static void buttonEventsTask(void * arg) {
 				/* Restart device */
 				esp_restart();
 			}
+		}
+
+		else if(bits & BUTTON_MEDIUM_PRESS_BIT) {
+			ESP_LOGI(TAG, "BUTTON_MEDIUM_PRESS_BIT set!");
+
+			xTaskNotifyGive(otaHandle);
 		}
 		else if(bits & BUTTON_LONG_PRESS_BIT) {
 			ESP_LOGI(TAG, "BUTTON_LONG_PRESS_BIT set!");
@@ -299,10 +304,10 @@ static void disconnectClientTask(void * arg) {
 		/* Change LED color according the station list */
 		if(updateLed) {
 			if(sta.num < CONFIG_WIFI_AP_MAX_STA_CONN) {
-			    ws2812_led_set_rgb(127, 0, 0);	/* Green */
+			    ws2812_led_set_rgb(0, 127, 0);	/* Green */
 			}
 			else if(sta.num == CONFIG_WIFI_AP_MAX_STA_CONN) {
-				ws2812_led_set_rgb(82, 127, 0);	/* Orange */
+				ws2812_led_set_rgb(127, 82, 0);	/* Orange */
 			}
 		}
 
@@ -338,6 +343,7 @@ static void otaTask(void * arg) {
 
 		if(event_to_process != 0) {
 			ESP_LOGI(TAG, "Starting OTA update");
+			updateLed = 0;
 			ws2812_led_set_hsv(60, 100, 25);	/* Set LED yellow */
 
 			esp_http_client_config_t config = {
@@ -353,7 +359,8 @@ static void otaTask(void * arg) {
 			else
 			{
 				ESP_LOGE(TAG, "Firmware upgrade failed");
-			    ws2812_led_set_rgb(127, 0, 0);	/* Green */
+				updateLed = 1;
+			    ws2812_led_set_rgb(0, 127, 0);	/* Green */
 			}
 		}
 	}
@@ -379,7 +386,7 @@ static void wifiEventHandler(void * arg, esp_event_base_t event_base, int32_t ev
 
 			updateLed = 0;
 
-	        ws2812_led_set_rgb(0, 127, 0);	/* Red */
+	        ws2812_led_set_rgb(127, 0, 0);	/* Red */
 
 	        break;
 		}
@@ -432,9 +439,12 @@ static void ipEventHandler(void * arg, esp_event_base_t event_base, int32_t even
 			ip_napt_enable(htonl(0xC0A80401), 1);	/* 192.168.4.1 */
 			ESP_LOGI (TAG, "NAT is enabled");
 
-		    ws2812_led_set_rgb(127, 0, 0);	/* Green */
+		    ws2812_led_set_rgb(0, 127, 0);	/* Green */
 
 			updateLed = 1;
+
+			/* Start MQTT client */
+			esp_mqtt_client_start(mqtt.client);
 
 			break;
 		}
@@ -549,6 +559,68 @@ static void provEventHandler(void * arg, esp_event_base_t event_base, int32_t ev
 
 			break;
 		}
+	}
+}
+
+static void mqttEventHandler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data) {
+    esp_mqtt_event_handle_t event = event_data;
+
+	switch(event_id) {
+		case MQTT_EVENT_CONNECTED: {
+			ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+
+			char * topic = NULL;
+			topic = malloc(50 * sizeof(* topic));
+
+			if(topic == NULL) {
+				/* If is not possible malloc memory, then restart the device */
+				esp_restart();
+			}
+			else {
+				/* Send connected message */
+				sprintf(topic, "connected/%.*s", strlen(deviceID) - 1, deviceID);
+				ESP_LOGI(TAG, "Publising to %s", topic);
+				esp_mqtt_client_publish(mqtt.client, topic, "hello world", 0, 0, 0);
+
+				/* Subscribe to user defined topics */
+				sprintf(topic, "updates/%.*s", strlen(deviceID) - 1, deviceID);
+				ESP_LOGI(TAG, "Subscribing to %s", topic);
+				esp_mqtt_client_subscribe(mqtt.client, topic, 0);
+			}
+
+			free(topic);
+
+			break;
+		}
+
+		case MQTT_EVENT_DATA: {
+	        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+
+	        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+	        printf("DATA=%.*s\r\n", event->data_len, event->data);
+
+			char * topic = NULL;
+			topic = malloc(50 * sizeof(* topic));
+
+			if(topic == NULL) {
+				/* If is not possible malloc memory, then restart the device */
+				esp_restart();
+			}
+			else {
+				sprintf(topic, "updates/%.*s", strlen(deviceID) - 1, deviceID);
+
+				if(!strncmp(event->topic, topic, event->topic_len)) {
+					xTaskNotifyGive(otaHandle);
+				}
+			}
+
+			free(topic);
+
+	        break;
+		}
+
+		default:
+			break;
 	}
 }
 
