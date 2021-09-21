@@ -74,9 +74,21 @@ esp_err_t wifi_Init(wifi_t * const me) {
     esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
-    /* Register event handlers */
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, me->wifiEventHandler, (void *)me, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, me->ipEventHandler, (void *)me, NULL));
+    /* Register Wi-Fi event handler */
+    if(me->wifiEventHandler == NULL) {
+    	ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifiEventHandler, (void *)me, NULL));
+    }
+    else {
+    	ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, me->wifiEventHandler, (void *)me, NULL));
+    }
+
+    /* Register IP event handler */
+    if(me->wifiEventHandler == NULL) {
+    	ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, ipEventHandler, (void *)me, NULL));
+    }
+    else {
+    	ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, me->ipEventHandler, (void *)me, NULL));
+    }
 
     /* Initialize Wi-Fi */
     wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
@@ -115,7 +127,13 @@ esp_err_t wifi_Init(wifi_t * const me) {
 
     /* Initialize provisioning manager */
 #ifdef CONFIG_WIFI_PROV_ENABLE
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, me->provEventHandler, (void *)me, NULL));
+	/* Register provisioning envent handler */
+    if(me->wifiEventHandler == NULL) {
+    	ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, provEventHandler, (void *)me, NULL));
+    }
+    else {
+    	ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, me->provEventHandler, (void *)me, NULL));
+    }
 
     wifi_prov_mgr_config_t prov_config = {
     		.scheme = wifi_prov_scheme_softap,
@@ -187,192 +205,15 @@ static esp_err_t customProvDataHandler(uint32_t session_id, const uint8_t * inbu
 }
 
 static void wifiEventHandler(void * arg, esp_event_base_t event_base, int event_id, void * event_data) {
-	wifi_t * wifi = (wifi_t *)arg;
-	wifi->wifiEventData = event_data;
-
-	switch(event_id)
-	{
-	case WIFI_EVENT_WIFI_READY:
-		ESP_LOGI(TAG, "WIFI_EVENT_WIFI_READY_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_WIFI_READY_BIT);
-		break;
-
-	case WIFI_EVENT_SCAN_DONE:
-		ESP_LOGI(TAG, "WIFI_EVENT_SCAN_DONE_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_SCAN_DONE_BIT);
-		break;
-
-	case WIFI_EVENT_STA_START:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_START_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_START_BIT);
-		break;
-
-	case WIFI_EVENT_STA_STOP:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_STOP_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_STOP_BIT);
-		break;
-
-	case WIFI_EVENT_STA_CONNECTED:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_CONNECTED_BIT);
-		break;
-
-	case WIFI_EVENT_STA_DISCONNECTED:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_DISCONNECTED_BIT);
-		break;
-
-	case WIFI_EVENT_STA_AUTHMODE_CHANGE:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_AUTHMODE_CHANGE_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_AUTHMODE_CHANGE_BIT);
-		break;
-
-	case WIFI_EVENT_STA_WPS_ER_SUCCESS:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_SUCCESS_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_WPS_ER_SUCCESS_BIT);
-		break;
-
-	case WIFI_EVENT_STA_WPS_ER_FAILED:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_FAILED_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_WPS_ER_FAILED_BIT);
-		break;
-
-	case WIFI_EVENT_STA_WPS_ER_TIMEOUT:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_TIMEOUT_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_WPS_ER_TIMEOUT_BIT);
-		break;
-
-	case WIFI_EVENT_STA_WPS_ER_PIN:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_PIN_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_WPS_ER_PIN_BIT);
-		break;
-
-	case WIFI_EVENT_STA_WPS_ER_PBC_OVERLAP:
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_WPS_ER_PBC_OVERLAP_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_STA_WPS_ER_PBC_OVERLAP_BIT);
-		break;
-
-	case WIFI_EVENT_AP_START:
-		ESP_LOGI(TAG, "WIFI_EVENT_AP_START_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_AP_START_BIT);
-		break;
-
-	case WIFI_EVENT_AP_STOP:
-		ESP_LOGI(TAG, "WIFI_EVENT_AP_STOP_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_AP_STOP_BIT);
-		break;
-
-	case WIFI_EVENT_AP_STACONNECTED:
-		ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED_BIT");
-		wifi_event_ap_staconnected_t * event = (wifi_event_ap_staconnected_t *)wifi->wifiEventData;
-		ESP_LOGI(TAG, "station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
-
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_AP_STACONNECTED_BIT);
-		break;
-
-	case WIFI_EVENT_AP_STADISCONNECTED:
-		ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_AP_STADISCONNECTED_BIT);
-		break;
-
-	case WIFI_EVENT_AP_PROBEREQRECVED:
-		ESP_LOGI(TAG, "WIFI_EVENT_AP_PROBEREQRECVED_BIT");
-		xEventGroupSetBits(wifi->wifiEventGroup, WIFI_EVENT_AP_PROBEREQRECVED_BIT);
-		break;
-
-		default:
-			break;
-	}
+	/* Keep empty */
 }
 
 static void ipEventHandler(void * arg, esp_event_base_t event_base, int event_id, void * event_data) {
-	wifi_t * wifi = (wifi_t *)arg;
-	wifi->ipEventData = event_data;
-
-	switch(event_id) {
-		case IP_EVENT_STA_GOT_IP:
-			ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_STA_GOT_IP_BIT);
-			break;
-
-		case IP_EVENT_STA_LOST_IP:
-			ESP_LOGI(TAG, "IP_EVENT_STA_LOST_IP");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_STA_LOST_IP_BIT);
-			break;
-
-		case IP_EVENT_AP_STAIPASSIGNED:
-			ESP_LOGI(TAG, "IP_EVENT_AP_STAIPASSIGNED");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_AP_STAIPASSIGNED_BIT);
-			break;
-
-		case IP_EVENT_GOT_IP6:
-			ESP_LOGI(TAG, "IP_EVENT_GOT_IP6");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_GOT_IP6_BIT);
-			break;
-
-		case IP_EVENT_ETH_GOT_IP:
-			ESP_LOGI(TAG, "IP_EVENT_ETH_GOT_IP");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_ETH_GOT_IP_BIT);
-			break;
-
-		case IP_EVENT_PPP_GOT_IP:
-			ESP_LOGI(TAG, "IP_EVENT_PPP_GOT_IP");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_PPP_GOT_IP_BIT);
-			break;
-
-		case IP_EVENT_PPP_LOST_IP:
-			ESP_LOGI(TAG, "IP_EVENT_PPP_LOST_IP");
-			xEventGroupSetBits(wifi->ipEventGroup, IP_EVENT_PPP_LOST_IP_BIT);
-			break;
-
-		default:
-			break;
-	}
+	/* Keep empty */
 }
 
 static void provEventHandler(void * arg, esp_event_base_t event_base, int event_id, void * event_data) {
-	wifi_t * wifi = (wifi_t *)arg;
-	wifi->provEventData = event_data;
-
-	switch(event_id) {
-	case WIFI_PROV_INIT:
-		ESP_LOGI(TAG, "WIFI_PROV_INIT");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_INIT_BIT);
-		break;
-
-	case WIFI_PROV_START:
-		ESP_LOGI(TAG, "WIFI_PROV_START");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_START_BIT);
-		break;
-
-	case WIFI_PROV_CRED_RECV:
-		ESP_LOGI(TAG, "WIFI_PROV_CRED_RECV");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_CRED_RECV_BIT);
-		break;
-
-	case WIFI_PROV_CRED_FAIL:
-		ESP_LOGI(TAG, "WIFI_PROV_CRED_FAIL");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_CRED_FAIL_BIT);
-		break;
-
-	case WIFI_PROV_CRED_SUCCESS:
-		ESP_LOGI(TAG, "WIFI_PROV_CRED_SUCCESS");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_CRED_SUCCESS_BIT);
-		break;
-
-	case WIFI_PROV_END:
-		ESP_LOGI(TAG, "WIFI_PROV_END");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_END_BIT);
-		break;
-
-	case WIFI_PROV_DEINIT:
-		ESP_LOGI(TAG, "WIFI_PROV_DEINIT");
-		xEventGroupSetBits(wifi->provEventGroup, WIFI_PROV_DEINIT_BIT);
-		break;
-
-		default:
-			break;
-	}
+	/* Keep empty */
 }
 
 /* end of file ---------------------------------------------------------------*/
