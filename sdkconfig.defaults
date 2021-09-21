@@ -94,4 +94,9 @@ CONFIG_PARTITION_TABLE_OFFSET=0x8000
 CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
+#
+# Wi-Fi component
+#
+CONFIG_WIFI_AP_SSID="NeaFi"
+
 # end of Component config
