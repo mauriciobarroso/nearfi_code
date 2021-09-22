@@ -162,7 +162,7 @@ static esp_err_t nvsInit(void) {
 
 			deviceID = malloc(data_len + sizeof(uint32_t));
 			nvs_get_str(nvs_handle, "deviceID", deviceID, &data_len);
-			ESP_LOGI(TAG, "deviceID:%.*s", data_len, deviceID);
+//			ESP_LOGI(TAG, "deviceID:%.*s", data_len, deviceID);
 
 			/* Device certificate */
 			if(nvs_get_str(nvs_handle, "thingCert", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
@@ -174,7 +174,7 @@ static esp_err_t nvsInit(void) {
 
 			deviceCert = malloc(data_len + sizeof(uint32_t));
 			nvs_get_str(nvs_handle, "thingCert", deviceCert, &data_len);
-			ESP_LOGI(TAG, "thingCert:%.*s", data_len, deviceCert);
+//			ESP_LOGI(TAG, "thingCert:%.*s", data_len, deviceCert);
 
 			/* Private key */
 			if(nvs_get_str(nvs_handle, "privateKey", NULL, &data_len) == ESP_ERR_NVS_NOT_FOUND) {
@@ -186,7 +186,7 @@ static esp_err_t nvsInit(void) {
 
 			deviceKey = malloc(data_len + sizeof(uint32_t));
 			nvs_get_str(nvs_handle, "privateKey", deviceKey, &data_len);
-			ESP_LOGI(TAG, "privateKey:%.*s", data_len, deviceKey);
+//			ESP_LOGI(TAG, "privateKey:%.*s", data_len, deviceKey);
 		}
 		else {
 			ESP_LOGI(TAG, "not open");
