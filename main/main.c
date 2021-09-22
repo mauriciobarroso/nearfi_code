@@ -320,8 +320,7 @@ static void tryToReconnectTask(void * arg)
 {
 	TickType_t last_time_wake = xTaskGetTickCount();
 
-	for(;;)
-	{
+	for(;;) {
 		/* Try connecting to Wi-Fi router using stored credentials. If connection is successful
 		 * then the task delete itself, in other cases this function is executed again*/
 		ESP_LOGI(TAG, "Unable to connect. Retrying...");
@@ -334,7 +333,6 @@ static void tryToReconnectTask(void * arg)
 
 static void otaTask(void * arg) {
 	uint32_t event_to_process;
-
 
 	for(;;) {
 		ESP_LOGI(TAG, "ERROR");
@@ -356,8 +354,7 @@ static void otaTask(void * arg) {
 			if(ret == ESP_OK) {
 				esp_restart();
 			}
-			else
-			{
+			else {
 				ESP_LOGE(TAG, "Firmware upgrade failed");
 				updateLed = 1;
 			    ws2812_led_set_rgb(0, 127, 0);	/* Green */
@@ -444,7 +441,7 @@ static void ipEventHandler(void * arg, esp_event_base_t event_base, int32_t even
 			updateLed = 1;
 
 			/* Start MQTT client */
-			esp_mqtt_client_start(mqtt.client);
+//			esp_mqtt_client_start(mqtt.client);
 
 			break;
 		}
