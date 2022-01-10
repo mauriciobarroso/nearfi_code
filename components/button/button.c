@@ -30,11 +30,10 @@ static void isr_handler(void * arg);
 
 /* external functions definition ---------------------------------------------*/
 
-esp_err_t button_Init(button_t * const me)
-{
-	esp_err_t ret;
+esp_err_t button_Init(button_t * const me) {
+	ESP_LOGI(TAG, "Initializing button component...");
 
-	ESP_LOGI(TAG, "Initializing button...");
+	esp_err_t ret;
 
 	/* Create Wi-Fi event group */
 	me->eventGroup = xEventGroupCreate();
@@ -46,14 +45,12 @@ esp_err_t button_Init(button_t * const me)
 
 	me->mode = FALLING_MODE;
 
-	if(me->mode == FALLING_MODE)
-	{
+	if(me->mode == FALLING_MODE) {
 		gpio_conf.pull_up_en = GPIO_PULLUP_ENABLE;
 		gpio_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
 		me->state = FALLING_STATE;
 	}
-	else if(me->mode == RISING_MODE)
-	{
+	else if(me->mode == RISING_MODE) {
 		gpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;
 		gpio_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
 		me->state = RISING_STATE;
@@ -62,19 +59,22 @@ esp_err_t button_Init(button_t * const me)
 	gpio_conf.intr_type = GPIO_INTR_ANYEDGE;
 	ret = gpio_config(&gpio_conf);
 
-	if(ret != ESP_OK)
+	if(ret != ESP_OK) {
 		return ret;
+	}
 
 	/* Install ISR service and add ISR handler */
 	gpio_install_isr_service(0);
 
-	if(ret != ESP_OK)
-			return ret;
+	if(ret != ESP_OK) {
+		return ret;
+	}
 
 	ret = gpio_isr_handler_add(CONFIG_BUTTON_PIN, isr_handler, (void *)me);
 
-	if(ret != ESP_OK)
+	if(ret != ESP_OK) {
 		return ret;
+	}
 
 	/*  */
 	me->pin = CONFIG_BUTTON_PIN;
@@ -85,14 +85,12 @@ esp_err_t button_Init(button_t * const me)
 
 /* internal functions definition ---------------------------------------------*/
 
-static void isr_handler(void * arg)
-{
+static void isr_handler(void * arg) {
 	button_t * button = (button_t *)arg;
 
 	TickType_t elapsed_time = 0;
 
-	switch(button->state)
-	{
+	switch(button->state) {
 		case FALLING_STATE:
 			if(gpio_get_level(button->pin) == button->mode) {
 				button->tick_counter = xTaskGetTickCountFromISR();

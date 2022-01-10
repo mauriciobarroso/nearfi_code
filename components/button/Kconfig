@@ -2,7 +2,7 @@ menu "Button Configuration"
 
     config BUTTON_PIN
         int "Button GPIO"
-        default 0
+        default 21
         help
             Set the button GPIO.
 
