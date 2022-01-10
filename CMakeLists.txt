@@ -6,4 +6,3 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(NearFi)
 
 target_add_binary_data(${CMAKE_PROJECT_NAME}.elf "certs/server.pem" TEXT)
-target_add_binary_data(${CMAKE_PROJECT_NAME}.elf "certs/aws.pem" TEXT)
