@@ -86,9 +86,6 @@ typedef void (* ipEventHandler_t)(void *, esp_event_base_t, int32_t, void *);
 typedef void (* provEventHandler_ts)(void *, esp_event_base_t, int32_t, void *);
 typedef struct
 {
-	EventGroupHandle_t wifiEventGroup;
-	EventGroupHandle_t ipEventGroup;
-	EventGroupHandle_t provEventGroup;
 	wifiEventHandler_t wifiEventHandler;
 	ipEventHandler_t ipEventHandler;
 	provEventHandler_ts provEventHandler;

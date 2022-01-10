@@ -33,36 +33,7 @@ static void provEventHandler(void * arg, esp_event_base_t event_base, int event_
 /* external functions definition ---------------------------------------------*/
 
 esp_err_t wifi_Init(wifi_t * const me) {
-	/* Create Wi-Fi event group */
-	me->wifiEventGroup = xEventGroupCreate();
-
-	if(me->wifiEventGroup == NULL) {
-		ESP_LOGI(TAG, "Event group failed");
-	}
-	else {
-		ESP_LOGI(TAG, "Event group successful");
-	}
-
-
-	/* Create IP event group */
-	me->ipEventGroup = xEventGroupCreate();
-
-	if(me->ipEventGroup == NULL) {
-		ESP_LOGI(TAG, "Event group failed");
-	}
-	else {
-		ESP_LOGI(TAG, "Event group successful");
-	}
-
-	/* Create provisioning event group */
-	me->provEventGroup = xEventGroupCreate();
-
-	if(me->provEventGroup == NULL) {
-		ESP_LOGI(TAG, "Event group failed");
-	}
-	else {
-		ESP_LOGI(TAG, "Event group successful");
-	}
+	ESP_LOGI(TAG, "Initializing wifi component...");
 
     /* Initialize stack TCP/IP */
     ESP_ERROR_CHECK(esp_netif_init());
@@ -172,6 +143,17 @@ esp_err_t wifi_Init(wifi_t * const me) {
 	}
 #endif
 
+	/* Print station and soft-AP MAC addresses */
+	ESP_LOGI(TAG, "*********************************************");
+	uint8_t mac[6];
+	esp_wifi_get_mac(WIFI_IF_STA, mac);
+	ESP_LOGI(TAG, "Station MAC: %02X%02X%02X%02X%02X%02X",
+			mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	esp_wifi_get_mac(WIFI_IF_AP, mac);
+	ESP_LOGI(TAG, "Soft-AP MAC: %02X%02X%02X%02X%02X%02X",
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	ESP_LOGI(TAG, "*********************************************");
+
 	return ESP_OK;
 }
 
@@ -190,10 +172,13 @@ static char * getDeviceServiceName(const char * ssid_prefix) {
 }
 
 static esp_err_t customProvDataHandler(uint32_t session_id, const uint8_t * inbuf, ssize_t inlen, uint8_t * * outbuf, ssize_t * outlen, void * priv_data) {
-    if (inbuf)
+    if (inbuf) {
     	ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
+    }
+
     char response[] = "SUCCESS";
     * outbuf = (uint8_t *)strdup(response);
+
     if (* outbuf == NULL) {
         ESP_LOGE(TAG, "System out of memory");
         return ESP_ERR_NO_MEM;
