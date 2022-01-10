@@ -12,6 +12,10 @@
 
 /* macros --------------------------------------------------------------------*/
 
+#define BUZZER_UP_MS_DEFAULT	100
+#define BUZZER_DOWN_MS_DEFAULT	100
+#define BUZZER_TIMES_DEFAULT	0
+
 /* typedef -------------------------------------------------------------------*/
 
 /* internal data declaration -------------------------------------------------*/
@@ -25,12 +29,14 @@ static const char * TAG = "Buzzer";
 /* external functions definition ---------------------------------------------*/
 
 esp_err_t buzzer_Init(buzzer_t * const me) {
+	ESP_LOGI(TAG, "Initializing buzzer component...");
+
 	esp_err_t ret = ESP_OK;
 
 	me->gpio = CONFIG_BUZZER_PIN;
-	me->high = 100;
-	me->low = 100;
-	me->times = 0;
+	me->high = BUZZER_UP_MS_DEFAULT;
+	me->low = BUZZER_DOWN_MS_DEFAULT;
+	me->times = BUZZER_TIMES_DEFAULT;
 
 	/* Configure the buzzer GPIO pin */
 	gpio_config_t gpio = {
