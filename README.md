@@ -1,5 +1,4 @@
 # NearFi
-## Description
 NearFi is a proximity Wi-Fi repeater based on ESP32-S2 and ESP-IDF.
 
 ## 1. Install prerequisites
