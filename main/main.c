@@ -23,11 +23,9 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "lwip/lwip_napt.h"
-#include "ping/ping_sock.h"
-#include "lwip/netdb.h"
 
 #include "button.h"
-#include "buzzer.h"
+#include "esp_buzzer.h"
 #include "wifi.h"
 #include "ws2812_led.h"
 
@@ -42,7 +40,11 @@
 
 #define DNS_IP_ADDR		(0x08080808)	/* 8.8.8.8 */
 #define GOOGLE_IP_ADDR	(0x8efa41e4)	/* 142.250.65.228 */
-#define OTA_URL			"https://esp32s2-ota-updates.s3.amazonaws.com/NearFi.bin"
+#define OTA_URL			"https://getbit-fuota.s3.amazonaws.com/nearfi.bin"
+
+#define BUZZER_SUCCESS()	esp_buzzer_start(&buzzer, 350, 0, 1)
+#define BUZZER_FAIL()			esp_buzzer_start(&buzzer, 50, 50, 2)
+#define BUZZER_ERROR()		esp_buzzer_start(&buzzer, 50, 50, 4)
 
 #if CONFIG_IDF_TARGET_ESP32
 #define TARGET_CRYPT_CNT_EFUSE  ESP_EFUSE_FLASH_CRYPT_CNT
@@ -58,7 +60,7 @@ typedef enum {
 	PROV_STATE,
 	CONNECTED_STATE,
 	DISCONNECTED_STATE,
-	TIMEOUT_PING_STATE,
+	FULL_STATE,
 	OTA_STATE,
 } system_state_e;
 
@@ -70,13 +72,11 @@ static const char * TAG = "app";
 /* Components instances */
 static wifi_t wifi;
 static button_t button;
-static buzzer_t buzzer;
+static esp_buzzer_t buzzer;
 
 /* Application variables */
 static TaskHandle_t reconnect_handle = NULL;
-static TaskHandle_t ota_handle = NULL;
 static system_state_e state = BOOT_STATE;
-static uint32_t ping_timeout_counter = 0;
 
 /* Certificates */
 extern const uint8_t server_cert_pem_start[] asm("_binary_server_pem_start");
@@ -85,17 +85,11 @@ extern const uint8_t server_cert_pem_start[] asm("_binary_server_pem_start");
 
 /* Utils*/
 static esp_err_t nvs_init(void);
-static esp_err_t beepSuccess(void);
-static esp_err_t beepFail(void);
-static esp_err_t beepError(void);
-static void ping_success(esp_ping_handle_t hdl, void *args);
-static void ping_timeout(esp_ping_handle_t hdl, void *args);
-static esp_err_t ping_init(void);
 static void print_macs(void);
+static void erase_wifi_creds(void * arg);
+static void reset_device(void * arg);
 
 /* RTOS tasks */
-static void button_events_task(void * arg);
-static void disconnect_clients_task(void * arg);
 static void reconnect_task(void * arg);
 static void ota_task(void * arg);
 static void led_control_task(void * arg);
@@ -117,10 +111,16 @@ void app_main(void) {
 	ESP_ERROR_CHECK(ws2812_led_init());
 
 	/* Initialize Button instance */
-	ESP_ERROR_CHECK(button_Init(&button));
+	ESP_ERROR_CHECK(button_init(&button,
+			GPIO_NUM_21,
+			tskIDLE_PRIORITY + 10,
+			configMINIMAL_STACK_SIZE * 6));
+	button_register_cb(&button, SHORT_TIME, reset_device, NULL);
+	button_register_cb(&button, MEDIUM_TIME, ota_task, NULL);
+	button_register_cb(&button, LONG_TIME, erase_wifi_creds, NULL);
 
 	/* Initialize Buzzer instance */
-	ESP_ERROR_CHECK(buzzer_Init(&buzzer));
+	ESP_ERROR_CHECK(esp_buzzer_init(&buzzer, GPIO_NUM_4));
 
 	/* Initialize Wifi instance */
 	wifi.wifi_event_handler= wifi_event_handler;
@@ -128,32 +128,11 @@ void app_main(void) {
 	wifi.prov_event_handler = prov_event_handler;
 	ESP_ERROR_CHECK(wifi_init(&wifi));
 
-	/* Initialize ping */
-	ping_init();
-
 	print_macs();
 
 	/* Create RTOS tasks */
 	ESP_LOGI(TAG, "Creating RTOS tasks...");
 
-	xTaskCreate(button_events_task,
-			"Button Events Task",
-			configMINIMAL_STACK_SIZE * 4,
-			NULL,
-			tskIDLE_PRIORITY + 3,
-			NULL);
-	xTaskCreate(disconnect_clients_task,
-			"Disconnect Client Task",
-			configMINIMAL_STACK_SIZE * 4,
-			NULL,
-			tskIDLE_PRIORITY + 2,
-			NULL);
-	xTaskCreate(ota_task,
-			"OTA Task",
-			configMINIMAL_STACK_SIZE * 6,
-			NULL,
-			tskIDLE_PRIORITY + 4,
-			&ota_handle);
 	xTaskCreate(led_control_task,
 			"LED control Task",
 			configMINIMAL_STACK_SIZE,
@@ -183,87 +162,6 @@ static esp_err_t nvs_init(void) {
 	else {
 		return ESP_FAIL;
 	}
-//
-//	ret = nvs_flash_init();
-//
-//    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-//        /* NVS partition was truncated and needs to be erased. Retry nvs_flash_init */
-//        ESP_ERROR_CHECK(nvs_flash_erase());
-//        ret = nvs_flash_init();
-//    }
-
-	return ret;
-}
-
-static esp_err_t beepSuccess(void) {
-	esp_err_t ret = ESP_OK;
-
-	ret = buzzer_Beep(&buzzer, 1, 200);
-
-	if(ret != ESP_OK) {
-		return ESP_FAIL;
-	}
-
-	ret = buzzer_Beep(&buzzer, 1, 50);
-
-	return ret;
-}
-
-static esp_err_t beepFail(void) {
-	esp_err_t ret = ESP_OK;
-
-	ret = buzzer_Beep(&buzzer, 3, 50);
-
-	return ret;
-}
-
-static esp_err_t beepError(void) {
-	esp_err_t ret = ESP_OK;
-
-	ret = buzzer_Beep(&buzzer, 4, 50);
-
-	return ret;
-}
-
-static void ping_success(esp_ping_handle_t hdl, void *args) {
-	ping_timeout_counter = 0;
-
-	if(state == TIMEOUT_PING_STATE) {
-		state = CONNECTED_STATE;
-	}
-}
-
-static void ping_timeout(esp_ping_handle_t hdl, void *args) {
-	ping_timeout_counter++;
-
-	if(ping_timeout_counter > 5) {
-		if(state == CONNECTED_STATE) {
-			state = TIMEOUT_PING_STATE;
-		}
-	}
-}
-
-static esp_err_t ping_init() {
-	esp_err_t ret;
-
-
-    esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
-    ping_config.target_addr.u_addr.ip4.addr = htonl(GOOGLE_IP_ADDR);
-    ping_config.target_addr.type = IPADDR_TYPE_V4;
-    ping_config.count = ESP_PING_COUNT_INFINITE;    // ping in infinite mode, esp_ping_stop can stop it
-
-    /* set callback functions */
-    esp_ping_callbacks_t cbs;
-    cbs.on_ping_success = ping_success;
-    cbs.on_ping_timeout = ping_timeout;
-    cbs.on_ping_end = NULL;
-    cbs.cb_args = NULL;
-
-	esp_ping_handle_t ping_handle;
-
-    ret = esp_ping_new_session(&ping_config, &cbs, &ping_handle);
-
-    esp_ping_start(ping_handle);
 
 	return ret;
 }
@@ -283,82 +181,6 @@ static void print_macs(void) {
 }
 
 /* RTOS tasks */
-static void button_events_task(void * arg) {
-	EventBits_t bits;
-	const EventBits_t bitsWaitFor = (BUTTON_SHORT_PRESS_BIT |
-									 BUTTON_MEDIUM_PRESS_BIT |
-									 BUTTON_LONG_PRESS_BIT);
-
-	for(;;) {
-		/* Wait until some bit is set */
-		bits = xEventGroupWaitBits(button.eventGroup, bitsWaitFor, pdTRUE, pdFALSE, portMAX_DELAY);
-
-		if(bits & BUTTON_SHORT_PRESS_BIT) {
-			ESP_LOGI(TAG, "BUTTON_SHORT_PRESS_BIT set!");
-
-			/* Activate buzzer */
-			beepError();
-
-			/* Erase any stored Wi-Fi credential  */
-			ESP_LOGI(TAG, "Erasing Wi-Fi credentials...");
-
-			esp_err_t ret;
-
-			nvs_handle_t nvs_handle;
-			ret = nvs_open("nvs.net80211", NVS_READWRITE, &nvs_handle);
-
-			if(ret == ESP_OK) {
-				nvs_erase_all(nvs_handle);
-			}
-
-			/* Close NVS */
-			ret = nvs_commit(nvs_handle);
-			nvs_close(nvs_handle);
-
-			if(ret == ESP_OK) {
-				/* Restart device */
-				esp_restart();
-			}
-		}
-
-		else if(bits & BUTTON_MEDIUM_PRESS_BIT) {
-			ESP_LOGI(TAG, "BUTTON_MEDIUM_PRESS_BIT set!");
-
-			xTaskNotifyGive(ota_handle);
-		}
-		else if(bits & BUTTON_LONG_PRESS_BIT) {
-			ESP_LOGI(TAG, "BUTTON_LONG_PRESS_BIT set!");
-		}
-		else {
-			ESP_LOGI(TAG, "Button unexpected Event");
-		}
-	}
-}
-
-static void disconnect_clients_task(void * arg) {
-	wifi_sta_list_t sta;
-
-	for(;;) {
-		esp_wifi_ap_get_sta_list(&sta);
-
-		/* Ask for every connected stations RSSI and drop out if that is less
-		 * than CONFIG_APP_RSSI_THRESHOLD_DROP_OUT */
-		for(uint8_t i = 0; i < sta.num; i++) {
-			ESP_LOGI(TAG, "Station "MACSTR", RSSI: %d", MAC2STR (sta.sta[i].mac), sta.sta[i].rssi);
-
-			if(sta.sta[i].rssi <= CONFIG_APP_RSSI_THRESHOLD_DROP_OUT) {
-				uint16_t aid = 0;
-				esp_wifi_ap_get_sta_aid(sta.sta[i].mac, &aid);
-				ESP_LOGI(TAG, "Drop out" MACSTR, MAC2STR(sta.sta[i].mac));
-				esp_wifi_deauth_sta(aid);
-			}
-		}
-
-		/* Wait 3 seconds to update list */
-		vTaskDelay(pdMS_TO_TICKS(3000));
-	}
-}
-
 static void reconnect_task(void * arg) {
 	TickType_t last_time_wake = xTaskGetTickCount();
 
@@ -376,30 +198,24 @@ static void reconnect_task(void * arg) {
 }
 
 static void ota_task(void * arg) {
-	uint32_t event_to_process;
-
-	for(;;) {
-		event_to_process = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
+	for (;;) {
 		state = OTA_STATE;
 
-		if(event_to_process != 0) {
-			ESP_LOGI(TAG, "Starting OTA update...");
+		ESP_LOGI(TAG, "Starting OTA update...");
 
-			esp_http_client_config_t config = {
-					.url = OTA_URL,
-					.cert_pem = (char *)server_cert_pem_start,
-			};
+		esp_http_client_config_t config = {
+				.url = OTA_URL,
+				.cert_pem = (char *)server_cert_pem_start,
+		};
 
-			esp_err_t ret = esp_https_ota(&config);
+		esp_err_t ret = esp_https_ota(&config);
 
-			if(ret == ESP_OK) {
-				ESP_LOGI(TAG, "Firmware updated successful");
-			}
-
-			ESP_LOGI(TAG, "Restarting device...");
-			esp_restart();
+		if(ret == ESP_OK) {
+			ESP_LOGI(TAG, "Firmware updated successful");
 		}
+
+		ESP_LOGI(TAG, "Restarting device...");
+		esp_restart();
 	}
 }
 
@@ -411,7 +227,6 @@ static void led_control_task(void * arg) {
 		switch(state) {
 			case BOOT_STATE: {
 				ws2812_led_set_rgb(0, 0, 127);	/* Blue */
-
 				break;
 			}
 
@@ -431,16 +246,23 @@ static void led_control_task(void * arg) {
 			case CONNECTED_STATE: {
 				ws2812_led_set_rgb(0, 127, 0);	/* Green */
 
+				wifi_sta_list_t sta;
+				esp_wifi_ap_get_sta_list(&sta);
+
+				if (sta.num >= CONFIG_WIFI_AP_MAX_STA_CONN) {
+					state = FULL_STATE;
+				}
+
 				break;
 			}
 
 			case DISCONNECTED_STATE: {
 				ws2812_led_set_rgb(127, 0, 0);	/* Red */
-
 				break;
 			}
 
-			case TIMEOUT_PING_STATE: {
+			case FULL_STATE:
+
 				blink = !blink;
 
 				if(blink) {
@@ -450,8 +272,14 @@ static void led_control_task(void * arg) {
 					ws2812_led_clear();
 				}
 
+				wifi_sta_list_t sta;
+				esp_wifi_ap_get_sta_list(&sta);
+
+				if (sta.num < CONFIG_WIFI_AP_MAX_STA_CONN) {
+					state = CONNECTED_STATE;
+				}
+
 				break;
-			}
 
 			case OTA_STATE: {
 				ws2812_led_set_rgb(127, 127, 0);	/* Yellow */
@@ -494,7 +322,7 @@ static void wifi_event_handler(void * arg, esp_event_base_t event_base, int32_t 
 
 			state = DISCONNECTED_STATE;
 
-	        break;
+			break;
 		}
 
 		case WIFI_EVENT_AP_STACONNECTED: {
@@ -505,27 +333,30 @@ static void wifi_event_handler(void * arg, esp_event_base_t event_base, int32_t 
 			/* If the station connected is not close to ESP32-S2, then the
 			 * connection is rejected */
 			wifi_sta_list_t sta;
-
 			esp_wifi_ap_get_sta_list(&sta);
 
-			for(uint8_t i = 0; i < sta.num; i++) {
+
+			for (uint8_t i = 0; i < sta.num; i++) {
 				ESP_LOGI(TAG, "station "MACSTR", RSSI: %d", MAC2STR(sta.sta[i].mac), sta.sta[i].rssi);
 				ESP_LOGI(TAG, "list[%d]: "MACSTR"", i, MAC2STR(sta.sta[i].mac));
 				ESP_LOGI(TAG, "event: "MACSTR"", MAC2STR(event->mac));
 
-				if(!strncmp((const char *)sta.sta[i].mac, (const char *)event->mac, 6)) {
+				if (!strncmp((const char *)sta.sta[i].mac, (const char *)event->mac, 6)) {
 					if(sta.sta[i].rssi <= (state == PROV_STATE? CONFIG_APP_RSSI_THRESHOLD_JOIN * 2 : CONFIG_APP_RSSI_THRESHOLD_JOIN)) {
-						ESP_LOGI(TAG, "RSSI less than RSSI threshold");
+						ESP_LOGE(TAG, "RSSI less than RSSI threshold");
 						esp_wifi_deauth_sta(event->aid);
 					}
 					else {
-						beepSuccess();
+						BUZZER_SUCCESS();
 					}
 				}
 			}
 
 			break;
 		}
+
+		case WIFI_EVENT_AP_STADISCONNECTED:
+			break;
 
 		default:
 			ESP_LOGI(TAG, "Other event");
@@ -576,7 +407,7 @@ static void prov_event_handler(void * arg, esp_event_base_t event_base, int32_t 
 		case WIFI_PROV_CRED_SUCCESS: {
 			ESP_LOGI(TAG, "WIFI_PROV_CRED_SUCCESS");
 
-			beepSuccess();
+			BUZZER_SUCCESS();
 
 			break;
 		}
@@ -593,7 +424,7 @@ static void prov_event_handler(void * arg, esp_event_base_t event_base, int32_t 
 		case WIFI_PROV_CRED_FAIL: {
 			ESP_LOGI(TAG, "WIFI_PROV_CRED_FAIL");
 
-			beepFail();
+			BUZZER_FAIL();
 
 			/* Erase any stored Wi-Fi credentials  */
 			ESP_LOGI(TAG, "Erasing Wi-Fi credentials");
@@ -683,6 +514,46 @@ static void prov_event_handler(void * arg, esp_event_base_t event_base, int32_t 
 			break;
 		}
 	}
+}
+
+/* Utils */
+static void erase_wifi_creds(void * arg) {
+	/* Activate buzzer */
+	BUZZER_ERROR();
+
+	/* Erase any stored Wi-Fi credential  */
+	ESP_LOGI(TAG, "Erasing Wi-Fi credentials...");
+
+	esp_err_t ret = ESP_OK;
+
+	nvs_handle_t nvs_handle;
+	ret = nvs_open("nvs.net80211", NVS_READWRITE, &nvs_handle);
+
+	if (ret != ESP_OK) {
+		ESP_LOGE(TAG, "Error opening NVS namespace");
+		return;
+	}
+	nvs_erase_all(nvs_handle);
+
+	/* Close NVS */
+	ret = nvs_commit(nvs_handle);
+	nvs_close(nvs_handle);
+
+	if (ret != ESP_OK) {
+		ESP_LOGE(TAG, "Error commiting the changes in NVS");
+		return;
+	}
+	else {
+		/* Restart device */
+		ESP_LOGI(TAG, "Restarting device...");
+		vTaskDelay(pdMS_TO_TICKS(500));
+		esp_restart();
+	}
+}
+
+static void reset_device(void * arg) {
+	ESP_LOGI(TAG, "Restarting device...");
+	esp_restart();
 }
 
 /* end of file ---------------------------------------------------------------*/
