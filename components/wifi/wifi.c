@@ -106,7 +106,7 @@ esp_err_t wifi_init(wifi_t * const me) {
 #if defined(CONFIG_WIFI_AP) || defined(CONFIG_WIFI_APSTA)
     wifi_config_t wifi_config_ap = {
     		.ap = {
-    				.ssid = CONFIG_WIFI_AP_SSID,
+					.ssid = CONFIG_WIFI_AP_SSID,
 					.ssid_len = strlen(CONFIG_WIFI_AP_SSID),
 					.channel = CONFIG_WIFI_AP_CHANNEL,
 					.password = CONFIG_WIFI_AP_PASS,

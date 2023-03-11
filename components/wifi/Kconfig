@@ -39,7 +39,7 @@ menu "Wifi Configuration"
             
     config WIFI_AP_MAX_STA_CONN
         int "AP maximum connected clients"
-        default 8
+        default 10
         depends on WIFI_AP || WIFI_APSTA
         help
             Maximum number of stations connected.
