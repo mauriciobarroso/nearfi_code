@@ -1,0 +1,7 @@
+menu "ESP RGB LED Configuration"
+    config RGB_LED_PIN
+        int "RGB LED pin"
+        default 0
+        help
+            Defines the GPIO pin that drives the RGB LED.
+endmenu
