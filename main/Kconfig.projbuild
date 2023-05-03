@@ -1,5 +1,5 @@
+menu "NearFi Configuration"
 menu "Application Configuration"
-
     config APP_RSSI_THRESHOLD_JOIN
         int "RSSI threshold join"
         default -35
@@ -17,5 +17,48 @@ menu "Application Configuration"
         default 20000
         help
             Time to try reconnection in ms.
+endmenu
 
+menu "Wifi Configuration"
+    config WIFI_AP_SSID
+        string "AP SSID"
+        default "esp32s2" 
+        help
+            Access point target SSID.
+            
+    config WIFI_AP_PASS
+        string "AP password"
+        help
+            Access point target password.
+            
+    config WIFI_AP_CHANNEL
+        int "AP channel"
+        default 1
+        help
+            Access point target channel.
+            
+    config WIFI_AP_MAX_STA_CONN
+        int "AP maximum connected clients"
+        default 10
+        help
+            Maximum number of stations connected.
+
+	config WIFI_PROV_ENABLE
+		bool "Enable provisioning"
+		default y
+		help
+			Enable Wi-Fi provisioning service.
+
+    config WIFI_POP_PIN
+        string "Proof of possesion"
+        help
+            Proof of possesion string. This is relevant only for protocom security 1.
+
+    config WIFI_SSID_PREFIX
+        string "SSID prefix"
+        default "PROV_"
+        help
+        	AP SSID prefix. This is concatenated with the MAC number to build the AP SSID.
+
+endmenu
 endmenu
