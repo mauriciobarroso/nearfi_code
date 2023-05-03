@@ -4,3 +4,8 @@ sdkconfig.old
 
 .project
 .cproject
+
+esp-idf-components/
+managed_components/
+
+dependencies.lock
