@@ -136,7 +136,7 @@ static void buzzer_timer_handler(TimerHandle_t timer) {
 	static uint16_t counter = 0;
 
 	/* Get the buzzer instance parameters */
-	esp_buzzer_t * buzzer = (esp_buzzer_t *)pvTimerGetTimerID(timer);
+	esp_buzzer_t *buzzer = (esp_buzzer_t *)pvTimerGetTimerID(timer);
 
 	/* If the buzzer off time is not equal to zero, do the toggle function */
 	if (buzzer->off_time) {
@@ -153,9 +153,7 @@ static void buzzer_timer_handler(TimerHandle_t timer) {
 	}
 
 	if (buzzer->state && buzzer->times != 0) {
-		counter++;
-
-		if (counter >= buzzer->times) {
+		if (++counter >= buzzer->times) {
 			counter = 0;
 			esp_buzzer_stop(buzzer);
 		}
