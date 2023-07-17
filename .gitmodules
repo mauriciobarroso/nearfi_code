@@ -1,3 +1,12 @@
 [submodule "components/button"]
 	path = components/button
 	url = https://github.com/mauriciobarroso/button.git
+[submodule "components/i2c_bus"]
+	path = components/i2c_bus
+	url = https://github.com/mauriciobarroso/i2c_bus.git
+[submodule "components/at24cs0x"]
+	path = components/at24cs0x
+	url = https://github.com/mauriciobarroso/at24cs0x.git
+[submodule "components/tpl5010"]
+	path = components/tpl5010
+	url = https://github.com/mauriciobarroso/tpl5010.git
