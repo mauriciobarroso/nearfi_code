@@ -48,6 +48,7 @@
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
 #include "nvs_flash.h"
+#include "rom/ets_sys.h"
 
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_softap.h"
@@ -59,18 +60,22 @@
 #include "lwip/lwip_napt.h"
 #include "esp_netif.h"
 
-#include "esp_buzzer.h"
 #include "esp_rgb_led.h"
 #include "button.h"
+#include "passive_buzzer.c"
+#include "at24cs0x.h"
+#include "i2c_bus.h"
+#include "tpl5010.h"
 
 /* Macros --------------------------------------------------------------------*/
 #define DNS_IP_ADDR	"8.8.8.8"
 #define AP_IP_ADDR	"192.168.4.1"
 #define OTA_URL			"https://getbit-fuota.s3.amazonaws.com/NearFi.bin"
 
-#define BUZZER_SUCCESS()	esp_buzzer_start(&buzzer, 50, 250, 2)
-#define BUZZER_FAIL()			esp_buzzer_start(&buzzer, 50, 50, 2)
-#define BUZZER_ERROR()		esp_buzzer_start(&buzzer, 50, 50, 4)
+#define BUZZER_SUCCESS()		passive_buzzer_run(&buzzer, sound_success, 3);
+#define BUZZER_FAIL()				passive_buzzer_run(&buzzer, sound_warning, 5);
+#define BUZZER_ERROR()			passive_buzzer_run(&buzzer, sound_error, 2);
+#define BUZZER_BEEP()				passive_buzzer_run(&buzzer, sound_beep, 3);
 
 #define LED_SET_RED()				esp_rgb_led_set(&led, 255, 0, 0)
 #define LED_SET_GREEN()			esp_rgb_led_set(&led, 0, 255, 0)
@@ -104,10 +109,34 @@ static system_state_e next_state = BOOT_STATE;
 /* Components */
 static button_t button;
 static esp_rgb_led_t led;
-static esp_buzzer_t buzzer;
+static passive_buzzer_t buzzer;
 
 /* Certificates */
 extern const uint8_t server_cert_pem_start[] asm("_binary_server_pem_start");
+
+/* Buzzer sounds */
+sound_t sound_beep[] = {
+		{3000, 100, 100}
+};
+
+sound_t sound_warning[] = {
+		{3000, 100, 100},
+		{3000, 100, 0},
+		{3000, 100, 100},
+		{3000, 100, 0},
+		{3000, 100, 100}
+};
+
+sound_t sound_success[] = {
+		{4000, 300, 100},
+		{2000, 200, 100},
+		{3000, 300, 100}
+};
+
+sound_t sound_error[] = {
+		{400, 300, 100},
+		{200, 300, 100}
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* Initialization functions */
@@ -138,11 +167,17 @@ static void reconnect_wifi_task(void *arg);
 static void ota_update_task(void *arg);
 static void led_control_task(void *arg);
 
+static tpl5010_t tpl5010;
+
+/* I2C functions */
+i2c_bus_t i2c_bus;
+at24cs0x_t at24cs0x;
+
 /* Main ----------------------------------------------------------------------*/
 void app_main(void) {
 	/* Initialize a button instance */
 	ESP_ERROR_CHECK(button_init(&button,
-			GPIO_NUM_21,
+			GPIO_NUM_38,
 			tskIDLE_PRIORITY + 4,
 			configMINIMAL_STACK_SIZE * 4));
 
@@ -150,8 +185,11 @@ void app_main(void) {
 	button_register_cb(&button, MEDIUM_TIME, ota_update, NULL);
 	button_register_cb(&button, LONG_TIME, erase_wifi_creds, NULL);
 
+	/* Initialize TPL5010 instance */
+	tpl5010_init(&tpl5010, GPIO_NUM_41, GPIO_NUM_42);
+
 	/* Initialize a LED instance */
-	ESP_ERROR_CHECK(esp_rgb_led_init(&led, GPIO_NUM_38, 1));
+	ESP_ERROR_CHECK(esp_rgb_led_init(&led, GPIO_NUM_14, 2));
 
 	/* Create LED contorl task */
 	xTaskCreate(led_control_task,
@@ -162,7 +200,7 @@ void app_main(void) {
 			NULL);
 
 	/* Initialize a buzzer instance */
-	ESP_ERROR_CHECK(esp_buzzer_init(&buzzer, GPIO_NUM_4));
+	passive_buzzer_init(&buzzer, GPIO_NUM_1, LEDC_TIMER_0, LEDC_CHANNEL_0);
 
 	/* Initialize NVS */
 	ESP_ERROR_CHECK(nvs_init());
@@ -172,6 +210,52 @@ void app_main(void) {
 
 	/* Print MACs */
 	print_macs();
+
+	/* Initialize I2C bus */
+	i2c_bus_init(&i2c_bus, I2C_NUM_0, GPIO_NUM_39, GPIO_NUM_40, false, false, 400000);
+	at24cs0x_init(&at24cs0x, &i2c_bus, AT24CS0X_I2C_ADDRESS, NULL, NULL);
+
+  for (uint8_t i = 0x80; i < 0x80 + AT24CS0X_SN_SIZE; i++) {
+  	uint8_t data = 0;
+
+  	int8_t rslt = at24cs0x_read_random(&at24cs0x, i, &data);
+
+		if (rslt == I2C_BUS_OK) {
+				printf("data[0x%02X]: 0x%02X\n", i, data);
+		} else {
+				printf("Error %d\n", rslt);
+		}
+  }
+
+  uint8_t data[AT24CS0X_SN_SIZE];
+  int8_t rslt = at24cs0x.i2c_dev->read(0x80, data, AT24CS0X_SN_SIZE, at24cs0x.i2c_dev);
+	if (rslt == I2C_BUS_OK) {
+		printf("serial number: ");
+		for (uint8_t i = 0; i < AT24CS0X_SN_SIZE; i++) {
+			printf("%02X", data[i]);
+		}
+		printf("\r\n");
+	} else {
+		printf("Error %d\n", rslt);
+	}
+
+	at24cs0x_read_serial_number(&at24cs0x);
+	printf("serial number: ");
+	for (uint8_t i = 0; i < AT24CS0X_SN_SIZE; i++) {
+		printf("%02X", at24cs0x.serial_number[i]);
+	}
+	printf("\r\n");
+
+	at24cs0x.i2c_dev->read(0x22, data, AT24CS0X_SN_SIZE, at24cs0x.i2c_dev);
+	if (rslt == I2C_BUS_OK) {
+		printf("serial number: ");
+		for (uint8_t i = 0; i < AT24CS0X_SN_SIZE; i++) {
+			printf("%02X", data[i]);
+		}
+		printf("\r\n");
+	} else {
+		printf("Error %d\n", rslt);
+	}
 }
 
 /* Private function definition -----------------------------------------------*/
@@ -461,7 +545,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 			wifi_sta_list_t sta;
 			esp_wifi_ap_get_sta_list(&sta);
 
-			if (sta.num < CONFIG_WIFI_AP_MAX_STA_CONN) {
+			if (sta.num < CONFIG_WIFI_AP_MAX_STA_CONN && current_state == FULL_STATE) {
 				next_state = CONNECTED_STATE;
 			}
 
@@ -733,8 +817,8 @@ static void erase_wifi_creds(void * arg) {
 
 static void reset_device(void *arg) {
 	ESP_LOGI(TAG, "Restarting device...");
-	BUZZER_SUCCESS();
-	vTaskDelay(pdMS_TO_TICKS(500));
+	BUZZER_FAIL();
+	vTaskDelay(pdMS_TO_TICKS(600));
 	esp_restart();
 }
 
@@ -827,3 +911,4 @@ static void print_macs(void) {
 }
 
 /***************************** END OF FILE ************************************/
+
