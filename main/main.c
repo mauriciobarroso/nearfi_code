@@ -110,6 +110,9 @@ static system_state_e next_state = BOOT_STATE;
 static button_t button;
 static esp_rgb_led_t led;
 static passive_buzzer_t buzzer;
+static i2c_bus_t i2c_bus;
+static tpl5010_t tpl5010;
+static at24cs0x_t at24cs0x;
 
 /* Certificates */
 extern const uint8_t server_cert_pem_start[] asm("_binary_server_pem_start");
@@ -160,18 +163,14 @@ static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *in
 static void erase_wifi_creds(void *arg);
 static void reset_device(void *arg);
 static void ota_update(void *arg);
-static void print_macs(void);
+static void print_ssid(void);
+static void print_mac(void);
+static void print_sn(void);
 
 /* RTOS tasks */
 static void reconnect_wifi_task(void *arg);
 static void ota_update_task(void *arg);
 static void led_control_task(void *arg);
-
-static tpl5010_t tpl5010;
-
-/* I2C functions */
-i2c_bus_t i2c_bus;
-at24cs0x_t at24cs0x;
 
 /* Main ----------------------------------------------------------------------*/
 void app_main(void) {
@@ -191,7 +190,7 @@ void app_main(void) {
 	/* Initialize a LED instance */
 	ESP_ERROR_CHECK(esp_rgb_led_init(&led, GPIO_NUM_14, 2));
 
-	/* Create LED contorl task */
+	/* Create LED control task */
 	xTaskCreate(led_control_task,
 			"LED control Task",
 			configMINIMAL_STACK_SIZE * 2,
@@ -202,60 +201,23 @@ void app_main(void) {
 	/* Initialize a buzzer instance */
 	passive_buzzer_init(&buzzer, GPIO_NUM_1, LEDC_TIMER_0, LEDC_CHANNEL_0);
 
+	/* Initialize I2C bus */
+	ESP_ERROR_CHECK(i2c_bus_init(&i2c_bus, I2C_NUM_0, GPIO_NUM_39, GPIO_NUM_40, false, false, 400000));
+
+	/* Initialize AT24CS02 */
+	ESP_ERROR_CHECK(at24cs0x_init(&at24cs0x, &i2c_bus, AT24CS0X_I2C_ADDRESS, NULL, NULL));
+
 	/* Initialize NVS */
 	ESP_ERROR_CHECK(nvs_init());
 
 	/* Initialize Wi-Fi */
 	ESP_ERROR_CHECK(wifi_init());
 
-	/* Print MACs */
-	print_macs();
-
-	/* Initialize I2C bus */
-	i2c_bus_init(&i2c_bus, I2C_NUM_0, GPIO_NUM_39, GPIO_NUM_40, false, false, 400000);
-	at24cs0x_init(&at24cs0x, &i2c_bus, AT24CS0X_I2C_ADDRESS, NULL, NULL);
-
-  for (uint8_t i = 0x80; i < 0x80 + AT24CS0X_SN_SIZE; i++) {
-  	uint8_t data = 0;
-
-  	int8_t rslt = at24cs0x_read_random(&at24cs0x, i, &data);
-
-		if (rslt == I2C_BUS_OK) {
-				printf("data[0x%02X]: 0x%02X\n", i, data);
-		} else {
-				printf("Error %d\n", rslt);
-		}
-  }
-
-  uint8_t data[AT24CS0X_SN_SIZE];
-  int8_t rslt = at24cs0x.i2c_dev->read(0x80, data, AT24CS0X_SN_SIZE, at24cs0x.i2c_dev);
-	if (rslt == I2C_BUS_OK) {
-		printf("serial number: ");
-		for (uint8_t i = 0; i < AT24CS0X_SN_SIZE; i++) {
-			printf("%02X", data[i]);
-		}
-		printf("\r\n");
-	} else {
-		printf("Error %d\n", rslt);
-	}
-
-	at24cs0x_read_serial_number(&at24cs0x);
-	printf("serial number: ");
-	for (uint8_t i = 0; i < AT24CS0X_SN_SIZE; i++) {
-		printf("%02X", at24cs0x.serial_number[i]);
-	}
-	printf("\r\n");
-
-	at24cs0x.i2c_dev->read(0x22, data, AT24CS0X_SN_SIZE, at24cs0x.i2c_dev);
-	if (rslt == I2C_BUS_OK) {
-		printf("serial number: ");
-		for (uint8_t i = 0; i < AT24CS0X_SN_SIZE; i++) {
-			printf("%02X", data[i]);
-		}
-		printf("\r\n");
-	} else {
-		printf("Error %d\n", rslt);
-	}
+	/* Print device info */
+	vTaskDelay(pdMS_TO_TICKS(100));
+	print_mac();
+	print_ssid();
+	print_sn();
 }
 
 /* Private function definition -----------------------------------------------*/
@@ -451,12 +413,12 @@ static esp_err_t wifi_init(void) {
 		wifi_prov_mgr_endpoint_create("custom-data");
 
 		/* Get SoftAP SSID name */
-		char * apNameProv = get_device_service_name("PROV_");
+		char *ap_prov_name = get_device_service_name("PROV_");
 		ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1,
 				strlen(CONFIG_WIFI_POP_PIN) > 1 ? CONFIG_WIFI_POP_PIN : NULL,
-						apNameProv,
+						ap_prov_name,
 						NULL));
-		free(apNameProv);
+		free(ap_prov_name);
 
 		/* Register previous created endpoint */
 		wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
@@ -896,18 +858,32 @@ static void led_control_task(void *arg) {
 	}
 }
 
-static void print_macs(void) {
+static void print_ssid(void) {
+	char *ap_prov_name = get_device_service_name("PROV_");
+
+	ESP_LOGI("Label", "ssid: %s", ap_prov_name);
+
+	free(ap_prov_name);
+}
+
+static void print_mac(void) {
 	uint8_t mac[6];
 
-	/* Print station and soft-AP MAC addresses */
-	ESP_LOGI(TAG, "*****************************");
 	esp_wifi_get_mac(WIFI_IF_STA, mac);
-	ESP_LOGI(TAG, "* Station MAC: %02X%02X%02X%02X%02X%02X *",
+	ESP_LOGI("Label", "MAC: %02X%02X%02X%02X%02X%02X",
 			mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-	esp_wifi_get_mac(WIFI_IF_AP, mac);
-	ESP_LOGI(TAG, "* Soft-AP MAC: %02X%02X%02X%02X%02X%02X *",
-				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-	ESP_LOGI(TAG, "*****************************");
+}
+
+static void print_sn(void) {
+	at24cs0x_read_serial_number(&at24cs0x);
+
+	ESP_LOGI("Label", "SN: %02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+			at24cs0x.serial_number[0], at24cs0x.serial_number[1], at24cs0x.serial_number[2],
+			at24cs0x.serial_number[3], at24cs0x.serial_number[4], at24cs0x.serial_number[5],
+			at24cs0x.serial_number[6], at24cs0x.serial_number[7], at24cs0x.serial_number[8],
+			at24cs0x.serial_number[9], at24cs0x.serial_number[10], at24cs0x.serial_number[11],
+			at24cs0x.serial_number[12], at24cs0x.serial_number[13], at24cs0x.serial_number[14],
+			at24cs0x.serial_number[15]);
 }
 
 /***************************** END OF FILE ************************************/
