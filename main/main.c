@@ -729,7 +729,7 @@ static void ota_update_task(void *arg) {
 
 		/* If the update was successful restart the device */
 		if (esp_https_ota(&ota_config) == ESP_OK) {
-			ESP_LOGI(TAG, "Firmware update successful");
+			ESP_LOGI(TAG, "Firmware update successfully");
 			reset_device(NULL);
 		}
 		else {
