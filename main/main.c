@@ -177,12 +177,13 @@ void app_main(void) {
 	/* Initialize a button instance */
 	ESP_ERROR_CHECK(button_init(&button,
 			GPIO_NUM_38,
+			BUTTON_EDGE_FALLING,
 			tskIDLE_PRIORITY + 4,
 			configMINIMAL_STACK_SIZE * 4));
 
-	button_register_cb(&button, SHORT_TIME, reset_device, NULL);
-	button_register_cb(&button, MEDIUM_TIME, ota_update, NULL);
-	button_register_cb(&button, LONG_TIME, erase_wifi_creds, NULL);
+	button_add_cb(&button, BUTTON_CLICK_SINGLE, reset_device, NULL);
+	button_add_cb(&button, BUTTON_CLICK_MEDIUM, ota_update, NULL);
+	button_add_cb(&button, BUTTON_CLICK_LONG, erase_wifi_creds, NULL);
 
 	/* Initialize TPL5010 instance */
 	tpl5010_init(&tpl5010, GPIO_NUM_41, GPIO_NUM_42);
@@ -553,9 +554,6 @@ static void prov_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 		case WIFI_PROV_CRED_RECV: {
 			ESP_LOGI(TAG, "WIFI_PROV_CRED_RECV");
 
-			wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
-			ESP_LOGI(TAG, "Credentials received, SSID: %s & Password: %s", (const char *) wifi_sta_cfg->ssid, (const char *) wifi_sta_cfg->password);
-
 			break;
 		}
 
@@ -605,7 +603,7 @@ static void prov_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 			ESP_LOGI(TAG, "WIFI_PROV_DEINIT");
 
 			/* Get SSID of the user AP */
-		    wifi_config_t wifi_conf;
+			wifi_config_t wifi_conf;
 			esp_wifi_get_config(ESP_IF_WIFI_STA, &wifi_conf);
 
 			char * ssid = NULL;
@@ -614,7 +612,7 @@ static void prov_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 			 * - +1: _ symbol
 			 * - +6: MAC address
 			 * - +1: \0 string terminator */
-			ssid = malloc((strlen((char *)wifi_conf.sta.ssid) + 1 + 6 + 1) * sizeof(* ssid));
+			ssid = malloc((strlen("NearFi") + 1 + 6 + 1) * sizeof(* ssid));
 
 			if(ssid == NULL) {
 				ssid = (char *)wifi_conf.sta.ssid;
@@ -622,7 +620,7 @@ static void prov_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 			else {
 				uint8_t eth_mac[6];
 				esp_wifi_get_mac(WIFI_IF_STA, eth_mac);
-				sprintf(ssid, "%s_%02X%02X%02X", wifi_conf.sta.ssid, eth_mac[3], eth_mac[4], eth_mac[5]);
+				sprintf(ssid, "NearFi_%02X%02X%02X", eth_mac[3], eth_mac[4], eth_mac[5]);
 			}
 
 			/* Set Wi-Fi Ap parameters */
@@ -666,11 +664,11 @@ static char *get_device_service_name(const char *ssid_prefix) {
 
 	name = malloc((strlen(ssid_prefix) + 6 + 1) * sizeof(*name));
 
-    uint8_t eth_mac[6];
-    esp_wifi_get_mac(WIFI_IF_STA, eth_mac);
-    sprintf(name, "%s%02X%02X%02X", ssid_prefix, eth_mac[3], eth_mac[4], eth_mac[5]);
+	uint8_t eth_mac[6];
+	esp_wifi_get_mac(WIFI_IF_STA, eth_mac);
+	sprintf(name, "%s%02X%02X%02X", ssid_prefix, eth_mac[3], eth_mac[4], eth_mac[5]);
 
-    return name;
+	return name;
 }
 
 static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
@@ -861,7 +859,7 @@ static void led_control_task(void *arg) {
 static void print_ssid(void) {
 	char *ap_prov_name = get_device_service_name("PROV_");
 
-	ESP_LOGI("Label", "ssid: %s", ap_prov_name);
+	ESP_LOGI("SSID", "%s", ap_prov_name);
 
 	free(ap_prov_name);
 }
@@ -870,14 +868,14 @@ static void print_mac(void) {
 	uint8_t mac[6];
 
 	esp_wifi_get_mac(WIFI_IF_STA, mac);
-	ESP_LOGI("Label", "MAC: %02X%02X%02X%02X%02X%02X",
+	ESP_LOGI("MAC", "%02X%02X%02X%02X%02X%02X",
 			mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 static void print_sn(void) {
 	at24cs0x_read_serial_number(&at24cs0x);
 
-	ESP_LOGI("Label", "SN: %02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+	ESP_LOGI("SN", "%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
 			at24cs0x.serial_number[0], at24cs0x.serial_number[1], at24cs0x.serial_number[2],
 			at24cs0x.serial_number[3], at24cs0x.serial_number[4], at24cs0x.serial_number[5],
 			at24cs0x.serial_number[6], at24cs0x.serial_number[7], at24cs0x.serial_number[8],
