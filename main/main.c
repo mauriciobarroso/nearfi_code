@@ -281,7 +281,7 @@ static esp_err_t wifi_init(void) {
   	return ret;
   }
 
-  uint32_t dhcps_lease_time = 60;
+  uint32_t dhcps_lease_time = 2 * 15;
   ret = esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &dhcps_lease_time, sizeof(dhcps_lease_time));
   if (ret != ESP_OK) {
   	return ret;
@@ -498,6 +498,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 				next_state = FULL_STATE;
 			}
 
+			printf("clients connected: %d\r\n", sta.num);
+
 			break;
 		}
 
@@ -511,6 +513,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 			if (sta.num < CONFIG_WIFI_AP_MAX_STA_CONN && current_state == FULL_STATE) {
 				next_state = CONNECTED_STATE;
 			}
+
+			printf("clients connected: %d\r\n", sta.num);
 
 			break;
 		}
