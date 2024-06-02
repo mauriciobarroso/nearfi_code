@@ -22,7 +22,7 @@ endmenu
 menu "Wifi Configuration"
     config WIFI_AP_SSID
         string "AP SSID"
-        default "esp32s2" 
+        default "NearFi" 
         help
             Access point target SSID.
             
