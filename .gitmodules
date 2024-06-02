@@ -7,3 +7,6 @@
 [submodule "components/tpl5010"]
 	path = components/tpl5010
 	url = https://github.com/mauriciobarroso/tpl5010.git
+[submodule "components/fsm"]
+	path = components/fsm
+	url = git@github.com:mauriciobarroso/fsm.git
