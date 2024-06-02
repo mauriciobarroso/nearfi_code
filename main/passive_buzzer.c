@@ -89,7 +89,7 @@ void passive_buzzer_set_volume(passive_buzzer_t *const me, uint32_t volume) {
 void passive_buzzer_run(passive_buzzer_t *const me, sound_t *data, size_t data_len) {
 	tone_index = 0;
 	me->sound_buf.data = data;
-	me->sound_buf.len = data_len; /* fixme: get data_len from data */
+	me->sound_buf.len = data_len;
 	xTimerChangePeriod(me->timer_handle, 1, 0);
 }
 
