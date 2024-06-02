@@ -45,6 +45,7 @@ extern "C" {
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
+#include "freertos/queue.h"
 
 #include "led_strip.h"
 
@@ -55,15 +56,51 @@ typedef struct {
 	uint8_t r;
 	uint8_t g;
 	uint8_t b;
-} rgb_t;
+} esp_rgb_led_color_t;
+
+typedef enum {
+	ESP_RGB_LED_MODE_CONTINUOUS = 0,
+	ESP_RGB_LED_MODE_BLINK,
+	ESP_RGB_LED_MODE_FADE,
+	ESP_RGB_LED_MODE_OFF,
+	ESP_RGB_LED_MODE_WIT_FUOTA,
+	ESP_RGB_LED_MODE_WIT_ALEXA_REQUEST,
+	ESP_RGB_LED_MODE_MAX
+} esp_rgb_led_mode_t;
+
+typedef enum {
+	ESP_RGB_LED_BLINK_STATE_ON = 0,
+	ESP_RGB_LED_BLINK_STATE_OFF = 1
+} esp_rgb_led_blink_state_t;
+
+typedef enum {
+	ESP_RGB_LED_FADE_STATE_RISING = 0,
+	ESP_RGB_LED_FADE_STATE_FALLING = 1,
+	ESP_RGB_LED_FADE_STATE_INACTIVE = 2
+} esp_rgb_led_fade_state_t;
 
 typedef struct {
 	led_strip_handle_t led_handle;
 	uint32_t gpio_num;
 	uint16_t led_num;
 	TimerHandle_t timer_handle;
-	bool led_state;
-	rgb_t rgb;
+	esp_rgb_led_blink_state_t blink_state;
+	esp_rgb_led_fade_state_t fade_state;
+	esp_rgb_led_color_t color;
+	esp_rgb_led_mode_t mode;
+	TaskHandle_t task_handle;
+	uint16_t on_time;
+	uint16_t off_time;
+	float on_delta_r;
+	float on_delta_g;
+	float on_delta_b;
+	float off_delta_r;
+	float off_delta_g;
+	float off_delta_b;
+	uint16_t counter;
+	uint16_t on_steps;
+	uint16_t off_steps;
+	esp_rgb_led_color_t current_color;
 } esp_rgb_led_t;
 /* Exported variables --------------------------------------------------------*/
 
@@ -71,50 +108,41 @@ typedef struct {
 /**
   * @brief Function to initialize a RGB LED instance
   *
-  * @param me      : Pointer to a esp_rgb_led_t structure
-  * @param gpio    : GPIO number to drive the RGB LEDs
-  * @param led_num : RGB LEDs number
+  * @param me              : Pointer to a esp_rgb_led_t structure
+  * @param gpio            : GPIO number to drive the RGB LEDs
+  * @param led_num         : RGB LEDs number
+  * @param task_priority   :
+  * @param task_stack_size :
   *
   * @retval
   * 	- ESP_OK on success
   * 	- ESP_FAIL on fail
   */
-esp_err_t esp_rgb_led_init(esp_rgb_led_t * const me, uint32_t gpio_num, uint16_t led_num);
+esp_err_t esp_rgb_led_init(esp_rgb_led_t * const me, uint32_t gpio_num,
+		uint16_t led_num);
 
 /**
-  * @brief Function to set the color of all RGB LEDs
-  *
-  * @param me : Pointer to a esp_rgb_led_t structure
-  * @param r  : Red color value
-  * @param g  : Green color value
-  * @param b  : Blue color value
+  * @brief Function to ...
   */
-void esp_rgb_led_set(esp_rgb_led_t * const me, uint8_t r, uint8_t g, uint8_t b);
+void esp_rgb_led_set_continuos(esp_rgb_led_t *const me, uint8_t r, uint8_t g,
+		uint8_t b);
 
 /**
-  * @brief Function to clear all RGB LEDs
-  *
-  * @param me : Pointer to a esp_rgb_led_t structure
+  * @brief Function to ...
   */
-void esp_rgb_led_clear(esp_rgb_led_t * const me);
+void esp_rgb_led_set_blink(esp_rgb_led_t *const me, uint8_t r, uint8_t g,
+		uint8_t b, uint16_t on_time, uint16_t off_time);
 
 /**
-  * @brief Function to start the blink operation
-  *
-  * @param me   : Pointer to a esp_rgb_led_t structure
-  * @param time : Blink time in miliseconds
-  * @param r    : Red color value
-  * @param g    : Green color value
-  * @param b    : Blue color value
+  * @brief Function to ...
   */
-void esp_rgb_led_blink_start(esp_rgb_led_t * const me, uint16_t time, uint8_t r, uint8_t g, uint8_t b);
+void esp_rgb_led_set_fade(esp_rgb_led_t *const me, uint8_t r, uint8_t g,
+		uint8_t b, uint16_t on_time, uint16_t off_time);
 
 /**
-  * @brief Function to stop the blink operation
-  *
-  * @param me : Pointer to a esp_rgb_led_t structure
+  * @brief Function to ...
   */
-void esp_rgb_led_blink_stop(esp_rgb_led_t * const me);
+void esp_rgb_led_set_off(esp_rgb_led_t *const me);
 
 #ifdef __cplusplus
 }
