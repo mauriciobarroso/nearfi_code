@@ -55,7 +55,7 @@
 /* Private function definitions ----------------------------------------------*/
 void reset_device(void *arg)
 {
-	ESP_LOGI("misc", "Restarting device...");
+	ESP_LOGW("misc", "Restarting device...");
 	vTaskDelay(pdMS_TO_TICKS(1000));
 	esp_restart();
 }
