@@ -6,12 +6,6 @@ menu "Application Configuration"
         help
             Minimun RSSI threshold to join the network.
 
-    config APP_RSSI_THRESHOLD_DROP_OUT
-        int "RSSI threshold drop out"
-        default -70
-        help
-            RSSI threshold to drop out a station from the network.
-
     config APP_RECONNECTION_TIME
         int "Reconnection time"
         default 20000
@@ -19,17 +13,76 @@ menu "Application Configuration"
             Time to try reconnection in ms.
 endmenu
 
+menu "OTA Configuration"
+	config OTA_ENABLE
+		bool "Enable OTA update"
+		default n
+		help
+			Enable OTA firmware updates.
+
+    config OTA_SERVER_CERT
+        string "OTA firmware update server certificate"
+        depends on OTA_ENABLE
+        help
+            Certificate to authenticate OTA server.
+
+    config OTA_FILE_URL
+        string "OTA firmware update URL"
+        depends on OTA_ENABLE
+        help
+            URL for firmware update binary file.
+endmenu
+
+menu "Peripherals Configuration"
+    config PERIPHERALS_LEDS_PIN
+        int "LEDs pin"
+        default 14
+        help
+            LEDs pin number.
+
+    config PERIPHERALS_BUZZER_PIN
+        int "Buzzer pin"
+        default 1
+        help
+            Buzzer pin number.
+
+    config PERIPHERALS_BUTTON_PIN
+        int "Button pin"
+        default 38
+        help
+            Button pin number.
+            
+    config PERIPHERALS_EWDT_WAKE_PIN
+        int "External WDT wake pin"
+        default 41
+        help
+            External WDT wake pin number.
+            
+    config PERIPHERALS_EWDT_DONE_PIN
+        int "External WDT done pin"
+        default 42
+        help
+            External WDT done pin number.
+            
+    config PERIPHERALS_I2C_SDA_PIN
+        int "I2C SDA pin"
+        default 39
+        help
+            I2C SDA pin number.
+            
+    config PERIPHERALS_I2C_SCL_PIN
+        int "I2C SCL pin"
+        default 40
+        help
+            I2C SCL pin number.
+endmenu
+
 menu "Wifi Configuration"
     config WIFI_AP_SSID
-        string "AP SSID"
-        default "NearFi" 
+        string "AP SSID prefix"
+        default "NearFi_" 
         help
-            Access point target SSID.
-            
-    config WIFI_AP_PASS
-        string "AP password"
-        help
-            Access point target password.
+            Access point SSID prefix.  This is concatenated with the MAC number to build the AP SSID.
             
     config WIFI_AP_CHANNEL
         int "AP channel"
@@ -39,26 +92,15 @@ menu "Wifi Configuration"
             
     config WIFI_AP_MAX_STA_CONN
         int "AP maximum connected clients"
-        default 10
+        default 15
         help
             Maximum number of stations connected.
 
-	config WIFI_PROV_ENABLE
-		bool "Enable provisioning"
-		default y
-		help
-			Enable Wi-Fi provisioning service.
-
-    config WIFI_POP_PIN
-        string "Proof of possesion"
-        help
-            Proof of possesion string. This is relevant only for protocom security 1.
-
-    config WIFI_SSID_PREFIX
-        string "SSID prefix"
+    config WIFI_PROV_SSID_PREFIX
+        string "Provisioning SSID prefix"
         default "PROV_"
         help
-        	AP SSID prefix. This is concatenated with the MAC number to build the AP SSID.
+        	Provisioning AP SSID prefix. This is concatenated with the MAC number to build the AP SSID.
 
 endmenu
 endmenu
