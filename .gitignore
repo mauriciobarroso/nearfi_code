@@ -1,6 +1,8 @@
 build/
+keys/
 sdkconfig
 sdkconfig.old
+sdkconfig.temp
 
 .project
 .cproject
