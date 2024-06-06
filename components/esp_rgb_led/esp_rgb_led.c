@@ -78,7 +78,7 @@ esp_err_t esp_rgb_led_init(esp_rgb_led_t * const me, uint32_t gpio_num,
 	led_strip_rmt_config_t rmt_config = {
 			.clk_src = RMT_CLK_SRC_DEFAULT,
 			.resolution_hz = 10 * 1000 * 1000,
-			.flags.with_dma = true
+			.flags.with_dma = false
 	};
 
 	ret = led_strip_new_rmt_device(&rgb_led_config, &rmt_config, &me->led_handle);
@@ -97,13 +97,12 @@ esp_err_t esp_rgb_led_init(esp_rgb_led_t * const me, uint32_t gpio_num,
 	}
 
 	/* Create RTOS task */
-	if (xTaskCreatePinnedToCore(esp_rgb_led_task,
+	if (xTaskCreate(esp_rgb_led_task,
 			"ESP RGB LED Task",
 			configMINIMAL_STACK_SIZE * 2,
 			(void *)me,
 			tskIDLE_PRIORITY + 1,
-			&me->task_handle,
-			1) != pdPASS) {
+			&me->task_handle) != pdPASS) {
 
 		ESP_LOGE(TAG, "Failed to allocate memory to create task");
 		return ESP_ERR_NO_MEM;
