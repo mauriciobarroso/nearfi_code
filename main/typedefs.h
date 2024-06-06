@@ -50,7 +50,7 @@ extern "C" {
 
 /* Exported typedef ----------------------------------------------------------*/
 typedef enum {
-	SYSTEM_STATE_BOOT = 0,
+	SYSTEM_STATE_INIT = 0,
 	SYSTEM_STATE_PROV,
 	SYSTEM_STATE_CONNECTED,
 	SYSTEM_STATE_DISCONNECTED,
