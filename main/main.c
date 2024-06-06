@@ -65,7 +65,6 @@
 /* Macros --------------------------------------------------------------------*/
 #define DNS_IP_ADDR			"8.8.8.8"
 #define AP_IP_ADDR			"192.168.4.1"
-#define OTA_URL				"https://getbit-fuota.s3.amazonaws.com/NearFi.bin"
 
 #define BUZZER_SUCCESS()	passive_buzzer_run(&buzzer, sound_success, 3);
 #define BUZZER_FAIL()		passive_buzzer_run(&buzzer, sound_warning, 5);
@@ -79,33 +78,37 @@
 #define LED_OTA_STATE()				esp_rgb_led_set_fade(&led, 255, 255, 0, 1000, 1000)
 #define LED_FULL_STATE()			esp_rgb_led_set_continuos(&led, 255, 165, 0)
 
-#define I2C_BUS_SDA_PIN		GPIO_NUM_39
-#define I2C_BUS_SCL_PIN		GPIO_NUM_40
-#define TPL5010_WAKE_PIN	GPIO_NUM_41
-#define TPL5010_DONE_PIN	GPIO_NUM_42
-#define BUTTON_PIN			GPIO_NUM_38
-#define BUZZER_PIN			GPIO_NUM_1
-#define LED_PIN				GPIO_NUM_14
+#define I2C_BUS_SDA_PIN		CONFIG_PERIPHERALS_I2C_SDA_PIN
+#define I2C_BUS_SCL_PIN		CONFIG_PERIPHERALS_I2C_SCL_PIN
+#define TPL5010_WAKE_PIN	CONFIG_PERIPHERALS_EWDT_WAKE_PIN
+#define TPL5010_DONE_PIN	CONFIG_PERIPHERALS_EWDT_DONE_PIN
+#define BUTTON_PIN			CONFIG_PERIPHERALS_BUTTON_PIN
+#define BUZZER_PIN			CONFIG_PERIPHERALS_BUZZER_PIN
+#define LED_PIN				CONFIG_PERIPHERALS_LEDS_PIN
 
 /* Typedef -------------------------------------------------------------------*/
 
 /* Private variables ---------------------------------------------------------*/
+/* Tag for debug */
 static const char *TAG = "NearFi";
+
 static TaskHandle_t reconnect_wifi_handle = NULL;
 static uint8_t serial_number[AT24CS0X_SN_SIZE];
-
-static i2c_master_bus_handle_t i2c_bus_handle;
 
 /* Components */
 static button_t button;
 static esp_rgb_led_t led;
 static passive_buzzer_t buzzer;
 static tpl5010_t tpl5010;
+static i2c_master_bus_handle_t i2c_bus_handle;
 static at24cs0x_t at24cs02;
 static fsm_t fsm;
 
-/* Certificates */
-extern const uint8_t server_cert[] asm("_binary_server_pem_start");
+/* OTA variables */
+#ifdef CONFIG_OTA_ENABLE
+extern const uint8_t ota_cert[] asm("_binary_server_pem_start");
+static char *ota_url = CONFIG_OTA_FILE_URL;
+#endif /* CONFIG_OTA_ENABLE */
 
 /* Buzzer sounds */
 sound_t sound_beep[] = {
@@ -143,10 +146,10 @@ void any_to_disconnected_fn(void);
 void connected_to_full_fn(void);
 void connected_to_ota_fn(void);
 
-fsm_row_t sst_list[9] = {
-		{SYSTEM_STATE_BOOT, SYSTEM_STATE_PROV, {{&is_prov, false}}, boot_to_prov_fn},
-		{SYSTEM_STATE_BOOT, SYSTEM_STATE_CONNECTED, {{&is_prov, true}, {&is_ip, true}}, any_to_connected_fn},
-		{SYSTEM_STATE_BOOT, SYSTEM_STATE_DISCONNECTED, {{&is_prov, true}, {&is_ip, false}}, any_to_disconnected_fn},
+static fsm_row_t sst_list[8] = {
+		{SYSTEM_STATE_INIT, SYSTEM_STATE_PROV, {{&is_prov, false}}, boot_to_prov_fn},
+		{SYSTEM_STATE_INIT, SYSTEM_STATE_CONNECTED, {{&is_prov, true}, {&is_ip, true}}, any_to_connected_fn},
+		{SYSTEM_STATE_INIT, SYSTEM_STATE_DISCONNECTED, {{&is_prov, true}, {&is_ip, false}}, any_to_disconnected_fn},
 		{SYSTEM_STATE_CONNECTED, SYSTEM_STATE_DISCONNECTED, {{&is_ip, false}}, any_to_disconnected_fn},
 		{SYSTEM_STATE_CONNECTED, SYSTEM_STATE_FULL, {{&is_full, true}}, connected_to_full_fn},
 		{SYSTEM_STATE_CONNECTED, SYSTEM_STATE_OTA, {{&is_ota, true}}, connected_to_ota_fn},
@@ -191,6 +194,17 @@ void app_main(void) {
 
 	LED_INIT_STATE();
 
+	/* Initialize FSM */
+	fsm_init(&fsm, sst_list);
+
+	xTaskCreate(
+			fsm_task,
+			"FSM Task",
+			configMINIMAL_STACK_SIZE * 4,
+			(void *)&fsm,
+			tskIDLE_PRIORITY + 5,
+			NULL);
+
 	/* Initialize a button instance */
 	ESP_ERROR_CHECK(button_init(&button,
 			BUTTON_PIN,
@@ -207,7 +221,6 @@ void app_main(void) {
 			&tpl5010,
 			TPL5010_WAKE_PIN,
 			TPL5010_DONE_PIN));
-
 
 	/* Initialize a buzzer instance */
 	passive_buzzer_init(
@@ -240,19 +253,8 @@ void app_main(void) {
 	/* Initialize Wi-Fi */
 	ESP_ERROR_CHECK(wifi_init());
 
-	/* Print device info */
+	/* Get OTA data and print device info */
 	print_dev_info();
-
-	/* Initialize FSM */
-	fsm_init(&fsm, sst_list);
-
-	xTaskCreate(
-			fsm_task,
-			"FSM Task",
-			configMINIMAL_STACK_SIZE * 4,
-			(void *)&fsm,
-			tskIDLE_PRIORITY + 5,
-			NULL);
 }
 
 /* Private function definition -----------------------------------------------*/
@@ -367,7 +369,7 @@ static esp_err_t wifi_init(void) {
 		return ret;
 	}
 
-	char *ssid = get_device_service_name("NearFi_");
+	char *ssid = get_device_service_name(CONFIG_WIFI_AP_SSID);
 
 	wifi_config_t wifi_config_ap = {
 		.ap = {
@@ -651,7 +653,7 @@ static void firmware_update(void *arg)
 
 static void print_dev_info(void)
 {
-	char *ap_prov_name = get_device_service_name("PROV_");
+	char *ap_prov_name = get_device_service_name(CONFIG_WIFI_PROV_SSID_PREFIX);
 
 	uint8_t mac[6];
 	esp_wifi_get_mac(WIFI_IF_STA, mac);
@@ -672,7 +674,7 @@ static void print_dev_info(void)
 }
 
 void boot_to_prov_fn(void) {
-	printf("\tBOOT -> PROV\r\n");
+	printf("\tINIT -> PROV\r\n");
 	LED_PROV_STATE();
 
 	ESP_LOGI(TAG, "Initializing provisioning...");
@@ -689,7 +691,7 @@ void boot_to_prov_fn(void) {
 	wifi_prov_mgr_endpoint_create("custom-data");
 
 	/* Get SoftAP SSID name */
-	char *ap_prov_name = get_device_service_name("PROV_");
+	char *ap_prov_name = get_device_service_name(CONFIG_WIFI_PROV_SSID_PREFIX);
 	ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1,
 			NULL,
 			ap_prov_name,
@@ -741,16 +743,20 @@ void connected_to_ota_fn(void) {
 	printf("\tCONNECTED -> OTA\r\n");
 	LED_OTA_STATE();
 
-	char *ota_url = (char*)OTA_URL;
+#ifdef CONFIG_OTA_ENABLE
 	ESP_LOGI(TAG, "Downloading firmware from %s...", ota_url);
 
-	if (ota_update(ota_url, (char*)server_cert, 60000) == ESP_OK) {
+	if (ota_update(ota_url, (char*)ota_cert, 60000) == ESP_OK) {
 		BUZZER_SUCCESS();
 		reset_device(NULL);
 	} else {
 		BUZZER_FAIL();
 		reset_device(NULL);
 	}
+#else
+	ESP_LOGE(TAG, "Firmware OTA updates are disabled, enable via menuconfig");
+	reset_device(NULL);
+#endif /* CONFIG_OTA_ENABLE */
 };
 
 /***************************** END OF FILE ************************************/
