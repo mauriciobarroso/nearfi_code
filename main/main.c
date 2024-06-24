@@ -43,7 +43,6 @@
 
 #include "esp_log.h"
 #include "esp_wifi.h"
-#include "esp_event.h"
 #include "esp_https_ota.h"
 #include "esp_netif.h"
 #include "driver/i2c_master.h"
@@ -51,7 +50,7 @@
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_softap.h"
 
-#include "esp_rgb_led.h"
+#include "led.h"
 #include "button.h"
 #include "passive_buzzer.c"
 #include "at24cs0x.h"
@@ -71,12 +70,12 @@
 #define BUZZER_ERROR()		passive_buzzer_run(&buzzer, sound_error, 2);
 #define BUZZER_BEEP()		passive_buzzer_run(&buzzer, sound_beep, 3);
 
-#define LED_CONNECTED_STATE()		esp_rgb_led_set_continuos(&led, 0, 255, 0)
-#define LED_INIT_STATE()			esp_rgb_led_set_continuos(&led, 255, 0, 255)
-#define LED_DISCONNECTED_STATE()	esp_rgb_led_set_blink(&led, 255, 0, 0, 500, 500)
-#define LED_PROV_STATE()			esp_rgb_led_set_fade(&led, 0, 0, 255, 1000, 1000)
-#define LED_OTA_STATE()				esp_rgb_led_set_fade(&led, 255, 255, 0, 1000, 1000)
-#define LED_FULL_STATE()			esp_rgb_led_set_continuos(&led, 255, 165, 0)
+#define LED_CONNECTED_STATE()		led_rgb_set_continuous(&led, 0, 255, 0)
+#define LED_INIT_STATE()			led_rgb_set_continuous(&led, 255, 0, 255)
+#define LED_DISCONNECTED_STATE()	led_rgb_set_blink(&led, 255, 0, 0, 500, 500)
+#define LED_PROV_STATE()			led_rgb_set_fade(&led, 0, 0, 255, 1000, 1000)
+#define LED_OTA_STATE()				led_rgb_set_fade(&led, 255, 255, 0, 1000, 1000)
+#define LED_FULL_STATE()			led_rgb_set_continuous(&led, 255, 165, 0)
 
 #define I2C_BUS_SDA_PIN		CONFIG_PERIPHERALS_I2C_SDA_PIN
 #define I2C_BUS_SCL_PIN		CONFIG_PERIPHERALS_I2C_SCL_PIN
@@ -94,10 +93,11 @@ static const char *TAG = "NearFi";
 
 static TaskHandle_t reconnect_wifi_handle = NULL;
 static uint8_t serial_number[AT24CS0X_SN_SIZE];
+static uint32_t reconnection_time = CONFIG_APP_RECONNECTION_TIME;
 
 /* Components */
 static button_t button;
-static esp_rgb_led_t led;
+static led_t led;
 static passive_buzzer_t buzzer;
 static tpl5010_t tpl5010;
 static i2c_master_bus_handle_t i2c_bus_handle;
@@ -187,23 +187,25 @@ static void fsm_task(void *arg);
 /* Main ----------------------------------------------------------------------*/
 void app_main(void) {
 	/* Initialize a LED instance */
-	ESP_ERROR_CHECK(esp_rgb_led_init(
+	ESP_ERROR_CHECK(led_strip_init(
 			&led,
 			LED_PIN,
 			2));
 
-	LED_INIT_STATE();
-
 	/* Initialize FSM */
 	fsm_init(&fsm, sst_list);
+	LED_INIT_STATE();
 
-	xTaskCreate(
+	if (xTaskCreate(
 			fsm_task,
 			"FSM Task",
 			configMINIMAL_STACK_SIZE * 4,
 			(void *)&fsm,
 			tskIDLE_PRIORITY + 5,
-			NULL);
+			NULL) != pdPASS) {
+		ESP_LOGE(TAG, "Failed to create FreeRTOS task");
+		error_handler();
+	}
 
 	/* Initialize a button instance */
 	ESP_ERROR_CHECK(button_init(&button,
@@ -365,18 +367,16 @@ static esp_err_t wifi_init(void) {
 			&instance_any_prov);
 
 	if (ret != ESP_OK) {
-		/* todo: write log */
 		return ret;
 	}
 
-	char *ssid = get_device_service_name(CONFIG_WIFI_AP_SSID);
+	char *ssid = get_device_service_name(CONFIG_WIFI_AP_SSID_PREFIX);
 
 	wifi_config_t wifi_config_ap = {
 		.ap = {
-				.ssid = CONFIG_WIFI_AP_SSID,
 				.ssid_len = strlen(ssid),
 				.channel = CONFIG_WIFI_AP_CHANNEL,
-				.password = CONFIG_WIFI_AP_PASS,
+				.password = "",
 				.max_connection = CONFIG_WIFI_AP_MAX_STA_CONN,
 				.authmode = WIFI_AUTH_OPEN
 		},
@@ -602,6 +602,7 @@ static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *in
 
 /* RTOS tasks */
 static void reconnect_wifi_task(void *arg) {
+	uint8_t reconnection_cnt = 0;
 	TickType_t last_time_wake = xTaskGetTickCount();
 
 	for (;;) {
@@ -613,8 +614,13 @@ static void reconnect_wifi_task(void *arg) {
 
 		esp_wifi_connect();
 
-		/* Wait CONFIG_WIFI_RECONNECT_TIME to try to reconnect */
-		vTaskDelayUntil(&last_time_wake, pdMS_TO_TICKS(15000));
+		/* Reset the device if it is not possible to recconect to the AP */
+		if (++reconnection_cnt >= 30) {
+			reset_device(NULL);
+		}
+
+		/* Wait CONFIG_APP_RECONNECTION_TIME to try to reconnect */
+		vTaskDelayUntil(&last_time_wake, pdMS_TO_TICKS(reconnection_time));
 	}
 }
 
@@ -723,13 +729,14 @@ void any_to_disconnected_fn(void) {
 
 	/* Create to reconnect to AP */
 	if (reconnect_wifi_handle == NULL) {
-		if (xTaskCreate(reconnect_wifi_task,
+		if (xTaskCreate(
+				reconnect_wifi_task,
 				"Reconnect Wi-Fi Task",
 				configMINIMAL_STACK_SIZE * 3,
 				NULL,
 				tskIDLE_PRIORITY + 1,
 				&reconnect_wifi_handle) != pdPASS) {
-			ESP_LOGI(TAG, "Error creating task");
+			ESP_LOGE(TAG, "Failed to create FreeRTOS task");
 		}
 	}
 };
