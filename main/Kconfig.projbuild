@@ -78,7 +78,7 @@ menu "Peripherals Configuration"
 endmenu
 
 menu "Wifi Configuration"
-    config WIFI_AP_SSID
+    config WIFI_AP_SSID_PREFIX
         string "AP SSID prefix"
         default "NearFi_" 
         help
