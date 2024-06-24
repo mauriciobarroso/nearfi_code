@@ -10,3 +10,6 @@
 [submodule "components/fsm"]
 	path = components/fsm
 	url = git@github.com:mauriciobarroso/fsm.git
+[submodule "components/led"]
+	path = components/led
+	url = git@github.com:mauriciobarroso/led.git
