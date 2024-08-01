@@ -7,3 +7,4 @@ factory,app,factory,,0x140000
 ota_0,app,ota_0,,0x140000
 ota_1,app,ota_1,,0x140000
 nvs_keys,data,nvs_keys,,4K
+storage,data,spiffs,,100K
