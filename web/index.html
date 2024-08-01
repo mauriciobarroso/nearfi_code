@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NearFi</title>
+    <link rel="icon" type="image/x-icon" src="/favicon.ico">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .login, .main {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 300px;
+        }
+        .login h2, .main h2 {
+            margin: 0 0 20px;
+        }
+        .login input[type="password"], .login input[type="submit"], .main input[type="checkbox"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            box-sizing: border-box;
+        }
+        .main label {
+            display: block;
+            margin: 10px 0;
+        }
+        .main input[type="submit"] {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login" id="login-form">
+        <h2>Login</h2>
+        <input type="password" id="password" placeholder="Password">
+        <input type="submit" value="Login" onclick="login()">
+    </div>
+    <div class="main" id="main-form" style="display: none;">
+        <h2>Seleccione los dominios que desea bloquear</h2>
+        <form id="domain-form">
+            <label>
+                <input type="checkbox" name="domains" value="whatsapp" data-value="whatsapp">
+                WhatsApp
+                <img src="/whatsapp.svg" alt="WhatsApp Icon">
+            </label>
+            <label>
+                <input type="checkbox" name="domains" value="facebook" data-value="facebook">
+                Facebook
+                <img src="/facebook.svg" alt="Facebook Icon">
+            </label>
+            <label>
+                <input type="checkbox" name="domains" value="instagram" data-value="instagram">
+                Instagram
+                <img src="/instagram.svg" alt="Instagram Icon">
+            </label>
+            <label>
+                <input type="checkbox" name="domains" value="tiktok" data-value="tiktok">
+                TikTok
+                <img src="/tiktok.svg" alt="TikTok Icon">
+            </label>
+            <label>
+                <input type="checkbox" name="domains" value="youtube" data-value="youtube">
+                YouTube
+                <img src="/youtube.svg" alt="YouTube Icon">
+            </label>
+            <input type="submit" value="Save" onclick="saveSettings(event)">
+        </form>
+    </div>
+
+    <script>
+        let otp = '';
+
+        function login() {
+            const password = document.getElementById('password').value;
+
+            fetch('/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ password: password })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.otp) {
+                    otp = data.otp;
+                    document.getElementById('login-form').style.display = 'none';
+                    document.getElementById('main-form').style.display = 'block';
+                } else {
+                    alert('Invalid password');
+                }
+            })
+            .catch(error => {
+                console.error('Error during login:', error);
+                alert('An error occurred during login. Please try again.');
+            });
+        }
+
+        function saveSettings(event) {
+            event.preventDefault();
+            const form = document.getElementById('domain-form');
+            const checkboxes = form.querySelectorAll('input[type="checkbox"]');
+            const settings = {};
+
+            checkboxes.forEach(checkbox => {
+                const domain = checkbox.getAttribute('data-value');
+                settings[domain] = checkbox.checked ? 1 : 0;
+            });
+
+            fetch('/set_settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'OTP': otp
+                },
+                body: JSON.stringify(settings)
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert('Settings saved');
+            })
+            .catch(error => {
+                console.error('Error saving settings:', error);
+                alert('Error saving settings');
+            });
+        }
+    </script>
+</body>
+</html>
