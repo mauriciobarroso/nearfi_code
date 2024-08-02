@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
     <title>NearFi</title>
-    <link rel="icon" type="image/x-icon" src="/favicon.ico">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -16,6 +16,15 @@
             align-items: center;
             height: 100vh;
         }
+        .banner {
+            text-align: center;
+            margin-bottom: 10px;
+            margin-top: 10px;
+        }
+        .banner img {
+            max-width: 60%;
+            height: auto;
+        }
         .login, .main {
             background-color: #fff;
             padding: 20px;
@@ -24,7 +33,7 @@
             width: 300px;
         }
         .login h2, .main h2 {
-            margin: 0 0 20px;
+            margin: 0 0 10px;
         }
         .login input[type="password"], .login input[type="submit"], .main input[type="checkbox"] {
             width: 100%;
@@ -39,73 +48,105 @@
         .main input[type="submit"] {
             margin-top: 20px;
         }
+        footer {
+            text-align: center;
+            margin-bottom: 10px;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .full-width-option {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .full-width-button {
+            padding: 10px 20px;
+            width: 100%;
+            box-sizing: border-box;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .divider {
+            border-bottom: 1px solid #ccc;
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body>
     <div class="login" id="login-form">
-        <h2>Login</h2>
-        <input type="password" id="password" placeholder="Password">
-        <input type="submit" value="Login" onclick="login()">
+        <div class="banner">
+            <img src="banner.png" alt="Banner Image">
+        </div>
+        <div class="divider"></div>
+        <h2>Ingrese su contraseña</h2>
+        <input type="password" id="password" placeholder="Contraseña">
+        <input type="submit" value="Login" class="full-width-button" onclick="login()">
+        <div class="divider"></div>
+        <footer>
+            &copy; 2024 Getbit Systems. All rights reserved.
+        </footer>
     </div>
     <div class="main" id="main-form" style="display: none;">
-        <h2>Seleccione los dominios que desea bloquear</h2>
-        <form id="domain-form">
-            <label>
-                <input type="checkbox" name="domains" value="whatsapp" data-value="whatsapp">
-                WhatsApp
-                <img src="/whatsapp.svg" alt="WhatsApp Icon">
-            </label>
-            <label>
-                <input type="checkbox" name="domains" value="facebook" data-value="facebook">
-                Facebook
-                <img src="/facebook.svg" alt="Facebook Icon">
-            </label>
-            <label>
-                <input type="checkbox" name="domains" value="instagram" data-value="instagram">
-                Instagram
-                <img src="/instagram.svg" alt="Instagram Icon">
-            </label>
-            <label>
-                <input type="checkbox" name="domains" value="tiktok" data-value="tiktok">
-                TikTok
-                <img src="/tiktok.svg" alt="TikTok Icon">
-            </label>
-            <label>
-                <input type="checkbox" name="domains" value="youtube" data-value="youtube">
-                YouTube
-                <img src="/youtube.svg" alt="YouTube Icon">
-            </label>
-            <input type="submit" value="Save" onclick="saveSettings(event)">
-        </form>
+        <div class="container">
+            <div class="banner">
+                <img src="banner.png" alt="Banner Image">
+            </div>
+            <div class="divider"></div>
+            <h2>Configuración</h2>
+            <form id="config-form">
+                <label for="network-name">Nombre de la red (SSID)</label>
+                <input type="text" id="network-name" class="full-width-option" name="network-name" required>
+    
+                <label for="max-clients">Número máximo de clientes</label>
+                <input type="number" id="max-clients" class="full-width-option" name="max-clients" min="1" required>
+                
+                <label for="max-connection-time">Tiempo máximo de conexión (minutos)</label>
+                <input type="number" id="max-connection-time" class="full-width-option" name="max-connection-time" min="1" required>
+
+                <label for="ad-blocking">Bloqueo de anuncios</label>
+                <select id="ad-blocking" class="full-width-option" name="ad-blocking">
+                    <option value="enabled">Habilitado</option>
+                    <option value="disabled">Deshabilitado</option>
+                </select>
+            
+                <input type="submit" value="Save" class="full-width-button" onclick="saveSettings(event)">
+            </form>
+        </div>
+        <div class="divider"></div>
+        <footer>
+            &copy; 2024 Getbit Systems. All rights reserved.
+        </footer>
     </div>
 
     <script>
         let otp = '';
 
         function login() {
-            const password = document.getElementById('password').value;
+            // const password = document.getElementById('password').value;
 
-            fetch('/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ password: password })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.otp) {
-                    otp = data.otp;
+            // fetch('/login', {
+            //     method: 'POST',
+            //     headers: {
+            //         'Content-Type': 'application/json'
+            //     },
+            //     body: JSON.stringify({ password: password })
+            // })
+            // .then(response => response.json())
+            // .then(data => {
+            //     if (data.otp) {
+            //         otp = data.otp;
                     document.getElementById('login-form').style.display = 'none';
                     document.getElementById('main-form').style.display = 'block';
-                } else {
-                    alert('Invalid password');
-                }
-            })
-            .catch(error => {
-                console.error('Error during login:', error);
-                alert('An error occurred during login. Please try again.');
-            });
+            //     } else {
+            //         alert('Invalid password');
+            //     }
+            // })
+            // .catch(error => {
+            //     console.error('Error during login:', error);
+            //     alert('An error occurred during login. Please try again.');
+            // });
         }
 
         function saveSettings(event) {
