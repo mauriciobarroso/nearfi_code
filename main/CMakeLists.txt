@@ -9,4 +9,4 @@ idf_component_register(
     PRIV_REQUIRES
 )
 
-spiffs_create_partition_image(storage ../web FLASH_IN_PROJECT)
+spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)

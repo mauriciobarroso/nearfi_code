@@ -66,6 +66,22 @@ typedef enum {
 	SYSTEM_WARNING = 1
 } system_return_t;
 
+typedef struct {
+	char ssid[32];
+	uint8_t clients;
+	uint16_t time;
+} settings_t;
+
+typedef struct {
+	uint8_t mac[6];
+	uint16_t time;
+} client_t;
+
+typedef struct {
+	uint8_t num;
+	client_t *client;
+} client_list_t;
+
 /* Exported variables --------------------------------------------------------*/
 
 /* Exported functions prototypes ---------------------------------------------*/

@@ -49,7 +49,7 @@
 /* Private macros ------------------------------------------------------------*/
 #define FILE_PATH_MAX				(ESP_VFS_PATH_MAX + \
 		                            CONFIG_SPIFFS_OBJ_NAME_LEN )
-#define SCRATCH_BUFSIZE				4096
+#define SCRATCH_BUFSIZE				2048
 #define IS_FILE_EXT(filename, ext) \
     (strcasecmp(&filename[strlen(filename) - sizeof(ext) + 1], ext) == 0)
 #define MIN(a,b)					 ((a) < (b) ? (a) : (b))
@@ -72,7 +72,6 @@ static struct file_server_data *server_data = NULL;
 static httpd_handle_t server = NULL;
 
 /* Private function prototypes -----------------------------------------------*/
-static esp_err_t spiffs_init(const char *base_path);
 static esp_err_t download_get_handler(httpd_req_t *req);
 static const char* get_path_from_uri(char *dest, const char *base_path,
 		const char *uri, size_t dest_size);
@@ -82,8 +81,6 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req,
 /* Exported functions definitions --------------------------------------------*/
 esp_err_t server_init(const char *base_path)
 {
-	ESP_ERROR_CHECK(spiffs_init(base_path));
-
     if (server_data) {
         ESP_LOGE("server", "File server already started");
         return ESP_ERR_INVALID_STATE;
@@ -138,47 +135,6 @@ esp_err_t server_uri_handler_add(const char *uri, httpd_method_t method,
 }
 
 /* Private function definitions ----------------------------------------------*/
-static esp_err_t spiffs_init(const char *base_path)
-{
-	ESP_LOGI("server", "Initializing SPIFFS");
-
-	esp_err_t ret = ESP_OK;
-
-	esp_vfs_spiffs_conf_t conf = {
-			.base_path = base_path,
-			.partition_label = NULL,
-			.max_files = 10,
-			.format_if_mount_failed = false
-	};
-
-	/* Register SPIFFS file system */
-	ret = esp_vfs_spiffs_register(&conf);
-
-	if (ret != ESP_OK) {
-		if (ret == ESP_FAIL) {
-			ESP_LOGE("server", "Failed to mount or format filesystem");
-		} else if (ret == ESP_ERR_NOT_FOUND) {
-			ESP_LOGE("server", "Failed to find SPIFFS partition");
-		} else {
-			ESP_LOGE("server", "Failed to initialize SPIFFS (%s)",
-					esp_err_to_name(ret));
-		}
-
-		return ret;
-	}
-
-	size_t total = 0, used = 0;
-	ret = esp_spiffs_info(NULL, &total, &used);
-	if (ret != ESP_OK) {
-		ESP_LOGE("server", "Failed to get SPIFFS partition information (%s)",
-				esp_err_to_name(ret));
-	} else {
-		ESP_LOGI("server", "Partition size: total: %d, used: %d", total, used);
-	}
-
-	return ret;
-}
-
 static esp_err_t download_get_handler(httpd_req_t *req)
 {
     char filepath[FILE_PATH_MAX];

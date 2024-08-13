@@ -98,6 +98,7 @@ esp_err_t ota_update(const char *ota_url, const char *ota_cert,
 			break;
 		}
 		TickType_t elapsed_time = xTaskGetTickCount() - initial_time;
+
 		if (pdMS_TO_TICKS(elapsed_time) > timeout_ms) {
 			return ESP_ERR_TIMEOUT;
 		}
