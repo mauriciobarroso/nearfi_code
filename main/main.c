@@ -57,7 +57,7 @@
 
 #include "led.h"
 #include "button.h"
-#include "passive_buzzer.c"
+#include "buzzer.h"
 #include "at24cs0x.h"
 #include "tpl5010.h"
 #include "fsm.h"
@@ -69,10 +69,10 @@
 #include "typedefs.h"
 
 /* Macros --------------------------------------------------------------------*/
-#define BUZZER_SUCCESS()	passive_buzzer_run(&buzzer, sound_success, 3);
-#define BUZZER_FAIL()		passive_buzzer_run(&buzzer, sound_warning, 5);
-#define BUZZER_ERROR()		passive_buzzer_run(&buzzer, sound_error, 2);
-#define BUZZER_BEEP()		passive_buzzer_run(&buzzer, sound_beep, 3);
+#define BUZZER_SUCCESS()	buzzer_run(&buzzer, sound_success, 3);
+#define BUZZER_FAIL()		buzzer_run(&buzzer, sound_warning, 5);
+#define BUZZER_ERROR()		buzzer_run(&buzzer, sound_error, 2);
+#define BUZZER_BEEP()		buzzer_run(&buzzer, sound_beep, 3);
 
 #define LED_CONNECTED_STATE()		led_rgb_set_continuous(&led, 0, 255, 0)
 #define LED_INIT_STATE()			led_rgb_set_continuous(&led, 255, 0, 255)
@@ -113,7 +113,7 @@ static uint32_t otp = 0;
 /* Components */
 static button_t button;
 static led_t led;
-static passive_buzzer_t buzzer;
+static buzzer_t buzzer;
 static tpl5010_t tpl5010;
 static i2c_master_bus_handle_t i2c_bus_handle;
 static at24cs0x_t at24cs02;
@@ -251,7 +251,7 @@ void app_main(void) {
 			TPL5010_DONE_PIN));
 
 	/* Initialize a buzzer instance */
-	passive_buzzer_init(
+	buzzer_init(
 			&buzzer,
 			BUZZER_PIN,
 			LEDC_TIMER_0,

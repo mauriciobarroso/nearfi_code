@@ -1,15 +1,15 @@
 /**
   ******************************************************************************
-  * @file           : esp_buzzer.h
+  * @file           : buzzer.h
   * @author         : Mauricio Barroso Benavides
-  * @date           : Feb 27, 2023
+  * @date           : Aug 13, 2024
   * @brief          : todo: write brief 
   ******************************************************************************
   * @attention
   *
   * MIT License
   *
-  * Copyright (c) 2023 Mauricio Barroso Benavides
+  * Copyright (c) 2024 Mauricio Barroso Benavides
   *
   * Permission is hereby granted, free of charge, to any person obtaining a copy
   * of this software and associated documentation files (the "Software"), to
@@ -33,71 +33,62 @@
   */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef ESP_BUZZER_H_
-#define ESP_BUZZER_H_
+#ifndef BUZZER_H_
+#define BUZZER_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include <stdint.h>
-#include <stdbool.h>
-
-#include "driver/gpio.h"
+#include "stdio.h"
+#include "stdlib.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/timers.h"
+
+#include "driver/ledc.h"
 
 /* Exported macro ------------------------------------------------------------*/
 
 /* Exported typedef ----------------------------------------------------------*/
-/* Buzzer data type */
 typedef struct {
+	uint32_t tone;
+	uint32_t time;
+	uint32_t volume;
+} sound_t;
+
+typedef struct {
+	sound_t *data;
+	size_t len;
+} sound_buf_t;
+
+typedef struct {
+	ledc_timer_t ledc_timer;
+	ledc_channel_t ledc_channel;
 	gpio_num_t gpio;
 	TimerHandle_t timer_handle;
-	bool state;
-	uint16_t on_time;
-	uint16_t off_time;
-	uint8_t times;
-} esp_buzzer_t;
+	sound_buf_t sound_buf;
+} buzzer_t;
 
 /* Exported variables --------------------------------------------------------*/
 
 /* Exported functions prototypes ---------------------------------------------*/
-/**
-  * @brief Initialize a buzzer instance
-  *
-  * @param me   : Pointer to a esp_buzzer_t structure
-  * @param gpio : GPIO number to drive the buzzer
-  *
-  * @retval
-  * 	- ESP_OK on success
-  * 	- ESP_FAIL on fail
-  */
-esp_err_t esp_buzzer_init(esp_buzzer_t * const me, gpio_num_t gpio);
+void buzzer_init(buzzer_t *const me, gpio_num_t gpio,
+		ledc_timer_t timer, ledc_channel_t channel);
 
-/**
-  * @brief Start a buzzer instance
-  *
-  * @param me       : Pointer to a esp_buzzer_t structure
-  * @param on_time  : GPIO number to drive the buzzer
-  * @param off_time : GPIO number to drive the buzzer
-  * @param times    : GPIO number to drive the buzzer
-  */
-void esp_buzzer_start(esp_buzzer_t * const me, uint16_t on_time, uint16_t off_time, uint8_t times);
+void buzzer_set_freq(buzzer_t *const me, uint32_t freq);
 
-/**
-  * @brief Stop a buzzer instance
-  *
-  * @param me : Pointer to a esp_buzzer_t structure
-  */
-void esp_buzzer_stop(esp_buzzer_t * const me);
+void buzzer_set_volume(buzzer_t *const me, uint32_t volume);
+
+void buzzer_run(buzzer_t *const me, sound_t *data,
+		size_t data_len);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ESP_BUZZER_H_ */
+#endif /* BUZZER_H_ */
 
 /***************************** END OF FILE ************************************/
