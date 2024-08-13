@@ -95,23 +95,17 @@
             </div>
             <div class="divider"></div>
             <h2>Configuración</h2>
-            <form id="config-form">
+            <form id="config-form" onsubmit="saveSettings(event)">
                 <label for="network-name">Nombre de la red (SSID)</label>
-                <input type="text" id="network-name" class="full-width-option" name="network-name" required>
+                <input type="text" id="network-name" class="full-width-option" name="network-name" required pattern="[a-zA-Z0-9_-]{4,64}" title="El nombre de la red solo puede contener letras, números, guiones y guiones bajos, y debe tener entre 4 y 64 caracteres.">
     
                 <label for="max-clients">Número máximo de clientes</label>
-                <input type="number" id="max-clients" class="full-width-option" name="max-clients" min="1" required>
+                <input type="number" id="max-clients" class="full-width-option" name="max-clients" min="0" max="15" required>
                 
                 <label for="max-connection-time">Tiempo máximo de conexión (minutos)</label>
-                <input type="number" id="max-connection-time" class="full-width-option" name="max-connection-time" min="1" required>
-
-                <label for="ad-blocking">Bloqueo de anuncios</label>
-                <select id="ad-blocking" class="full-width-option" name="ad-blocking">
-                    <option value="enabled">Habilitado</option>
-                    <option value="disabled">Deshabilitado</option>
-                </select>
+                <input type="number" id="max-connection-time" class="full-width-option" name="max-connection-time" min="0" max="65535" required>
             
-                <input type="submit" value="Save" class="full-width-button" onclick="saveSettings(event)">
+                <input type="submit" value="Guardar" class="full-width-button">
             </form>
         </div>
         <div class="divider"></div>
@@ -122,60 +116,105 @@
 
     <script>
         let otp = '';
+        let currentSettings = '';
 
         function login() {
-            // const password = document.getElementById('password').value;
+            const password = document.getElementById('password').value;
 
-            // fetch('/login', {
-            //     method: 'POST',
-            //     headers: {
-            //         'Content-Type': 'application/json'
-            //     },
-            //     body: JSON.stringify({ password: password })
-            // })
-            // .then(response => response.json())
-            // .then(data => {
-            //     if (data.otp) {
-            //         otp = data.otp;
-                    document.getElementById('login-form').style.display = 'none';
-                    document.getElementById('main-form').style.display = 'block';
-            //     } else {
-            //         alert('Invalid password');
-            //     }
-            // })
-            // .catch(error => {
-            //     console.error('Error during login:', error);
-            //     alert('An error occurred during login. Please try again.');
-            // });
+            fetch('/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/plain'
+                },
+                body: password
+            })
+            .then(response => {
+                if (response.status === 200) {
+                    return response.text();  // Expect the OTP as plain text
+                } else {
+                    throw new Error('Invalid password');
+                }
+            })
+            .then(receivedOtp => {
+                otp = receivedOtp;  // Assign the received OTP to the global variable
+                document.getElementById('login-form').style.display = 'none';
+                document.getElementById('main-form').style.display = 'block';
+                loadConfig();
+            })
+            .catch(error => {
+                console.error('Error during login:', error);
+                alert('An error occurred during login. Please try again.');
+            });
         }
 
         function saveSettings(event) {
             event.preventDefault();
-            const form = document.getElementById('domain-form');
-            const checkboxes = form.querySelectorAll('input[type="checkbox"]');
-            const settings = {};
+            const maxClients = document.getElementById('max-clients').value;
+            const maxConnectionTime = document.getElementById('max-connection-time').value * 60;
+            const networkName = document.getElementById('network-name').value;
 
-            checkboxes.forEach(checkbox => {
-                const domain = checkbox.getAttribute('data-value');
-                settings[domain] = checkbox.checked ? 1 : 0;
-            });
+            const namePattern = /^[a-zA-Z0-9_-]{4,31}$/;
+            if (!namePattern.test(networkName)) {
+                alert('El nombre de la red solo puede contener letras, números, guiones y guiones bajos, y debe tener entre 4 y 64 caracteres.');
+                return;
+            }
+
+            if (maxClients < 1 || maxClients > 15) {
+                alert('El número máximo de clientes debe estar entre 1 y 15.');
+                return;
+            }
+
+            if (maxConnectionTime < 1 || maxConnectionTime > 65535) {
+                alert('El tiempo máximo de conexión debe estar entre 1 y 1000 minutos.');
+                return;
+            }
+
+            const newSettings = `${maxClients},${maxConnectionTime},${networkName}`;
+            if (newSettings === currentSettings) {
+                alert('No hay cambios en la configuración.');
+                return;
+            }
 
             fetch('/set_settings', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'OTP': otp
+                    'Content-Type': 'text/plain',
+                    'Otp': otp
                 },
-                body: JSON.stringify(settings)
+                body: newSettings
             })
-            .then(response => response.json())
+            .then(response => response.text())
             .then(data => {
-                alert('Settings saved');
+                if (data === 'success') {
+                    alert('Ajustes guardados exitosamente');
+                    currentSettings = newSettings;
+                } else {
+                    alert('Error guardando la configuración');
+                }
             })
             .catch(error => {
-                console.error('Error saving settings:', error);
-                alert('Error saving settings');
+                console.error('Error saving config:', error);
+                alert('Error guardando la configuración');
             });
+        }
+
+        function loadConfig() {
+            fetch('/get_settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/plain',
+                    'Otp': otp
+                },
+            })
+            .then(response => response.text())
+            .then(data => {
+                let values = data.split(',');
+                document.getElementById('max-clients').value = values[0];
+                document.getElementById('max-connection-time').value = values[1] / 60;
+                document.getElementById('network-name').value = values[2];
+                currentSettings = data;
+            })
+            .catch(error => console.error('Error loading config:', error));
         }
     </script>
 </body>
