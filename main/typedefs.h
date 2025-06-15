@@ -41,24 +41,97 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
+#include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include "lwip/stats.h"
 
 /* Exported Macros -----------------------------------------------------------*/
 
 
 /* Exported typedef ----------------------------------------------------------*/
 typedef enum {
-	SYSTEM_STATE_INIT = 0,
-	SYSTEM_STATE_PROV,
-	SYSTEM_STATE_CONNECTED,
-	SYSTEM_STATE_DISCONNECTED,
-	SYSTEM_STATE_FULL,
-	SYSTEM_STATE_OTA,
-	SYSTEM_STATE_MAX
-} system_state_t;
+	EVENT_PROCESS_NO = 0,
+	
+	/* Producers */
+	EVENT_PROCESS_WIFI,
+	EVENT_PROCESS_IP,
+	EVENT_PROCESS_PROV,
+	EVENT_PROCESS_TICK,
+	EVENT_PROCESS_BUTTON,
+	EVENT_PROCESS_WDT,
+	EVENT_PROCESS_HEALTH,
+	
+	/* Consumers */
+	EVENT_PROCESS_ACTIONS,
+	EVENT_PROCESS_ALERTS,
+	EVENT_PROCESS_NETWORK,
+	EVENT_PROCESS_CLIENTS,
+	EVENT_PROCESS_MAX
+} event_process_t;
 
+typedef enum {
+	EVENT_REQUEST_NO = 0,
+	EVENT_REQUEST_OTA,
+	EVENT_REQUEST_FADE,
+	EVENT_REQUEST_SET,
+	EVENT_REQUEST_CLEAR,
+	EVENT_REQUEST_SUCESS,
+	EVENT_REQUEST_FAIL,
+	EVENT_REQUEST_WARNING,
+	EVENT_REQUEST_CONNECTED,
+	EVENT_REQUEST_DISCONNECTED,
+	EVENT_REQUEST_ENABLE,
+	EVENT_REQUEST_DISABLE,
+	EVENT_REQUEST_ADD,
+	EVENT_REQUEST_REMOVE,
+	EVENT_REQUEST_RESET,
+	EVENT_REQUEST_RESTORE,
+	EVENT_REQUEST_WDT,
+	EVENT_REQUEST_TICK,
+	EVENT_REQUEST_DEAUTH,
+	EVENT_REQUEST_MAX
+} event_request_t;
+
+typedef enum {
+	EVENT_RESPONSE_NO = 0,
+	EVENT_RESPONSE_SUCCESS,
+	EVENT_RESPONSE_FAIL,
+	EVENT_RESPONSE_WARNING,
+	EVENT_RESPONSE_TIMEOUT,
+	EVENT_RESPONSE_EMPTY,
+	EVENT_RESPONSE_FULL,
+	EVENT_RESPONSE_AVAILABLE,
+	EVENT_RESPONSE_MAX
+} event_response_t;
+
+typedef struct {
+	event_process_t src;
+	event_process_t dst;
+	event_request_t request;
+	event_response_t response;		
+	union {
+		struct {
+			uint8_t aid;
+			uint8_t mac[6];
+		} client;
+		struct {
+			struct stats_ip_napt napt_stats;
+			multi_heap_info_t heap_dram;
+			multi_heap_info_t heap_psram;
+		} health;
+		struct {
+			bool update;
+			uint8_t r;
+			uint8_t g;
+			uint8_t b;
+			uint16_t on_time;
+			uint16_t off_time;
+		} led;
+	} data;
+	uint32_t timestamp;	
+} event_t; 
 
 typedef enum {
 	SYSTEM_ERROR = -1,
@@ -73,7 +146,9 @@ typedef struct {
 } settings_t;
 
 typedef struct {
+	uint8_t aid;
 	uint8_t mac[6];
+	
 	uint16_t time;
 } client_t;
 

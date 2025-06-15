@@ -1,6 +1,6 @@
 /**
   ******************************************************************************
-  * @file           : r.c
+  * @file           : server.c
   * @author         : Mauricio Barroso Benavides
   * @date           : Jul 27, 2024
   * @brief          : todo: write brief

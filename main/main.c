@@ -1,4 +1,3 @@
-
 /**
   ******************************************************************************
   * @file           : main.c
@@ -39,48 +38,44 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "freertos/FreeRTOS.h"
+#include "esp_err.h"
+#include "esp_system.h"
+#include "esp_wifi_types_generic.h"
+#include "freertos/idf_additions.h"
+#include "freertos/projdefs.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 #include "esp_log.h"
 #include "esp_wifi.h"
-#include "esp_https_ota.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_mac.h"
-#include "esp_psram.h"
+
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
+#include <netdb.h>
 #include "driver/i2c_master.h"
+#include "portmacro.h"
+#include "sdkconfig.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_softap.h"
-#include "lwip/ip4_napt.h"
 #include "lwip/ip4_addr.h"
+#include "lwip/lwip_napt.h"
 
 #include "led.h"
 #include "button.h"
 #include "buzzer.h"
 #include "at24cs0x.h"
 #include "tpl5010.h"
-#include "fsm.h"
 
 #include "misc.c"
 #include "nvs.c"
-#include "cdns.c"
 #include "server.c"
 #include "typedefs.h"
 
 /* Macros --------------------------------------------------------------------*/
-#define BUZZER_SUCCESS()	buzzer_run(&buzzer, sound_success, 3);
-#define BUZZER_FAIL()		buzzer_run(&buzzer, sound_warning, 5);
-#define BUZZER_ERROR()		buzzer_run(&buzzer, sound_error, 2);
-#define BUZZER_BEEP()		buzzer_run(&buzzer, sound_beep, 3);
-
-#define LED_CONNECTED_STATE()		led_rgb_set_continuous(&led, 0, 255, 0)
-#define LED_INIT_STATE()			led_rgb_set_continuous(&led, 255, 0, 255)
-#define LED_DISCONNECTED_STATE()	led_rgb_set_blink(&led, 255, 0, 0, 500, 500)
-#define LED_PROV_STATE()			led_rgb_set_fade(&led, 0, 0, 255, 1000, 1000)
-#define LED_OTA_STATE()				led_rgb_set_fade(&led, 255, 255, 0, 1000, 1000)
-#define LED_FULL_STATE()			led_rgb_set_continuous(&led, 255, 109, 10)
-
+/* Peripherals GPIOs macros */
 #define I2C_BUS_SDA_PIN		CONFIG_PERIPHERALS_I2C_SDA_PIN
 #define I2C_BUS_SCL_PIN		CONFIG_PERIPHERALS_I2C_SCL_PIN
 #define TPL5010_WAKE_PIN	CONFIG_PERIPHERALS_EWDT_WAKE_PIN
@@ -89,12 +84,27 @@
 #define BUZZER_PIN			CONFIG_PERIPHERALS_BUZZER_PIN
 #define LED_PIN				CONFIG_PERIPHERALS_LEDS_PIN
 
+/* Settings macros */
 #define SETTINGS_EEPROM_ADDR		0x0
 #define SETTINGS_SSID_DEFAULT		"NearFi"
 #define SETTINGS_CLIENTS_DEFAULT	15
 #define SETTINGS_TIME_DEFAULT		60000
 
+/* SPIFFS macros */
 #define SPIFFS_BASE_PATH	"/spiffs"
+
+/**/
+#define APP_QUEUE_LEN_DEFAULT	5
+
+/**/
+#define APP_TASK_HEALTH_MONITOR_PRIORITY	tskIDLE_PRIORITY + 1
+#define APP_TASK_ACTIONS_PRIORITY			tskIDLE_PRIORITY + 2
+#define APP_TASK_ALERTS_PRIORITY			tskIDLE_PRIORITY + 3	
+#define APP_TASK_NETWORK_PRIORITY			tskIDLE_PRIORITY + 4
+#define APP_TASK_CLIENTS_PRIORITY			tskIDLE_PRIORITY + 5
+#define APP_TASK_TICK_PRIORITY				tskIDLE_PRIORITY + 6
+#define APP_TASK_RESPONSES_MANAGER_PRIORITY	tskIDLE_PRIORITY + 7
+#define APP_TASK_SYSTEM_EVENTS_PRIORITY		tskIDLE_PRIORITY + 8
 
 /* Typedef -------------------------------------------------------------------*/
 
@@ -102,9 +112,7 @@
 /* Tag for debug */
 static const char *TAG = "NearFi";
 
-static TaskHandle_t reconnect_wifi_handle = NULL;
 static uint8_t serial_number[AT24CS0X_SN_SIZE];
-static uint32_t reconnection_time = CONFIG_APP_RECONNECTION_TIME;
 static uint8_t mac_addr[6];
 static settings_t settings;
 static client_list_t clients;
@@ -114,16 +122,9 @@ static uint32_t otp = 0;
 static button_t button;
 static led_t led;
 static buzzer_t buzzer;
-static tpl5010_t tpl5010;
+static tpl5010_t wdt;
+static at24cs0x_t eeprom;
 static i2c_master_bus_handle_t i2c_bus_handle;
-static at24cs0x_t at24cs02;
-static fsm_t fsm;
-
-/* FSM events */
-static fsm_event_val_t is_prov = FSM_EVENT_VAL_NA;
-static fsm_event_val_t is_ip = FSM_EVENT_VAL_NA;
-static fsm_event_val_t is_ota = FSM_EVENT_VAL_NA;
-static fsm_event_val_t is_full = FSM_EVENT_VAL_NA;
 
 /* OTA variables */
 #ifdef CONFIG_OTA_ENABLE
@@ -133,44 +134,41 @@ static char *ota_url = CONFIG_OTA_FILE_URL;
 
 /* Buzzer sounds */
 sound_t sound_beep[] = {
-		{3000, 100, 100}
+    {880, 100, 100},  // La5
 };
 
 sound_t sound_warning[] = {
-		{3000, 100, 100},
-		{3000, 100, 0},
-		{3000, 100, 100},
-		{3000, 100, 0},
-		{3000, 100, 100}
+    {784, 150, 100},   // Sol5
+    {659, 150, 100},   // Mi5
+    {784, 150, 100},   // Sol5
 };
-
 sound_t sound_success[] = {
-		{4000, 300, 100},
-		{2000, 200, 100},
-		{3000, 300, 100}
+    {784, 120, 100},   // Sol5
+    {988, 180, 100},   // Si5
+    {1175, 220, 80},   // Re6
 };
 
-sound_t sound_error[] = {
-		{400, 300, 100},
-		{200, 300, 100}
+sound_t sound_fail[] = {
+    {880, 200, 100},   // La5
+    {698, 180, 100},   // Fa5
+	{523, 250, 100},   // Do5	
 };
 
-void boot_to_prov_fn(void);
-void any_to_connected_fn(void);
-void any_to_disconnected_fn(void);
-void connected_to_full_fn(void);
-void connected_to_ota_fn(void);
-
-static fsm_row_t sst_list[8] = {
-		{SYSTEM_STATE_INIT, SYSTEM_STATE_PROV, {{&is_prov, false}}, boot_to_prov_fn},
-		{SYSTEM_STATE_INIT, SYSTEM_STATE_CONNECTED, {{&is_prov, true}, {&is_ip, true}}, any_to_connected_fn},
-		{SYSTEM_STATE_INIT, SYSTEM_STATE_DISCONNECTED, {{&is_prov, true}, {&is_ip, false}}, any_to_disconnected_fn},
-		{SYSTEM_STATE_CONNECTED, SYSTEM_STATE_DISCONNECTED, {{&is_ip, false}}, any_to_disconnected_fn},
-		{SYSTEM_STATE_CONNECTED, SYSTEM_STATE_FULL, {{&is_full, true}}, connected_to_full_fn},
-		{SYSTEM_STATE_CONNECTED, SYSTEM_STATE_OTA, {{&is_ota, true}}, connected_to_ota_fn},
-		{SYSTEM_STATE_DISCONNECTED, SYSTEM_STATE_CONNECTED, {{&is_ip, true}}, any_to_connected_fn},
-		{SYSTEM_STATE_FULL, SYSTEM_STATE_CONNECTED, {{&is_full, false}}, any_to_connected_fn}
+sound_t sound_startup[] = {
+    { 1000,  80,  90 },   // suave, base
+    { 1500, 100, 100 },   // subida progresiva
+    { 2000, 120, 100 },   // nota limpia, aguda
+    { 1500,  60,  80 },   // leve caída
+    { 1800, 100, 90  },   // final brillante
 };
+
+/**/
+static QueueHandle_t system_events_queue;
+static QueueHandle_t clients_requests_queue;
+static QueueHandle_t actions_requests_queue;
+static QueueHandle_t network_requests_queue;
+static QueueHandle_t alerts_requests_queue;
+static QueueHandle_t processes_responses_queue;
 
 
 /* Private function prototypes -----------------------------------------------*/
@@ -192,13 +190,11 @@ static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *in
 
 /* Utils */
 static void erase_wifi_creds(void *arg);
-static void firmware_update(void *arg);
 static void print_dev_info(void);
 
 /* RTOS tasks */
-static void reconnect_wifi_task(void *arg);
-static void fsm_task(void *arg);
-static void clients_timeout_task(void *arg);
+static void tick_task(void *arg);
+static void health_monitor_task(void *arg);
 
 static char *read_http_response(httpd_req_t *req);
 static esp_err_t settings_save_handler(httpd_req_t *req);
@@ -215,23 +211,55 @@ static uint8_t settings_get_clients(void);
 static uint16_t settings_get_time(void);
 
 static void list_init(void);
-static void list_add(uint8_t *mac);
+static void list_add(uint8_t *mac, uint8_t aid);
 static void list_remove(uint8_t *mac);
 
 static esp_err_t spiffs_init(const char *base_path);
 
+/**/
+static esp_err_t app_create_queues(void);
+static esp_err_t app_create_tasks(void);
+static void system_events_manager_task(void *arg);
+static void processes_responses_manager_task(void *arg);
+static void alerts_task(void *arg);
+static void network_task(void *arg);
+static void actions_task(void *arg);
+static void clients_task(void *arg);
+
+static void button_cb(void *arg);
+
+static void event_send_to_manager(event_t *event);
+static void event_send_response(event_t *event, event_response_t response);
+static void event_request_to_alerts(event_t *const event, event_request_t request);
+static void event_request_to_actions(event_t *const event, event_request_t request);
+static void event_request_to_network(event_t *const event, event_request_t request);
+static void event_set_alerts(event_t *const event, uint8_t r, uint8_t g, uint8_t b, uint16_t on_time, uint16_t off_time);
+static void event_set_data_client(event_t *const me, uint8_t aid, uint8_t *mac);
+
+static int tls_health_check(void);
 /* Main ----------------------------------------------------------------------*/
 void app_main(void) {
+	/**/
+	ESP_ERROR_CHECK(app_create_queues());
+	ESP_ERROR_CHECK(app_create_tasks());
+
 	/* Initialize a LED instance */
 	ESP_ERROR_CHECK(led_strip_init(
 			&led,
 			LED_PIN,
 			2));
 
-	/* Initialize FSM */
-	fsm_init(&fsm, sst_list);
-	LED_INIT_STATE();
-
+	led_rgb_set_continuous(&led, 127, 0, 127);
+	
+	/* Initialize a buzzer instance */
+	buzzer_init(
+			&buzzer,
+			BUZZER_PIN,
+			LEDC_TIMER_0,
+			LEDC_CHANNEL_0);
+			
+	buzzer_run(&buzzer, sound_startup, 5);
+			
 	/* Initialize a button instance */
 	ESP_ERROR_CHECK(button_init(
 			&button,
@@ -239,35 +267,18 @@ void app_main(void) {
 			BUTTON_EDGE_FALLING,
 			tskIDLE_PRIORITY + 4,
 			configMINIMAL_STACK_SIZE * 2));
-
-	button_add_cb(&button, BUTTON_CLICK_SINGLE, reset_device, NULL);
-	button_add_cb(&button, BUTTON_CLICK_MEDIUM, firmware_update, NULL);
-	button_add_cb(&button, BUTTON_CLICK_LONG, erase_wifi_creds, NULL);
+			
+	/* Add butttons callbacks functions for single, medium and log click */
+	button_add_cb(&button, BUTTON_CLICK_SINGLE, button_cb, (void *)EVENT_REQUEST_RESET);
+	button_add_cb(&button, BUTTON_CLICK_MEDIUM, button_cb, (void *)EVENT_REQUEST_OTA);
+	button_add_cb(&button, BUTTON_CLICK_LONG, button_cb, (void *)EVENT_REQUEST_RESTORE);
 
 	/* Initialize TPL5010 instance */
 	ESP_ERROR_CHECK(tpl5010_init(
-			&tpl5010,
+			&wdt,
 			TPL5010_WAKE_PIN,
 			TPL5010_DONE_PIN));
 
-	/* Initialize a buzzer instance */
-	buzzer_init(
-			&buzzer,
-			BUZZER_PIN,
-			LEDC_TIMER_0,
-			LEDC_CHANNEL_0);
-
-	/* Create FSM task */
-	if (xTaskCreate(
-			fsm_task,
-			"FSM Task",
-			configMINIMAL_STACK_SIZE * 3,
-			(void *)&fsm,
-			tskIDLE_PRIORITY + 5,
-			NULL) != pdPASS) {
-		ESP_LOGE(TAG, "Failed to create FreeRTOS task");
-		error_handler();
-	}
 
 	/* Initialize I2C bus */
 	i2c_master_bus_config_t i2c_bus_config = {
@@ -282,7 +293,7 @@ void app_main(void) {
 
 	/* Initialize AT24CS02 */
 	ESP_ERROR_CHECK(at24cs0x_init(
-			&at24cs02, /* AT24CS0X instance */
+			&eeprom, /* AT24CS0X instance */
 			i2c_bus_handle, /* I2C bus instance */
 			AT24CS0X_I2C_ADDRESS, /* I2C device address */
 			AT24CS0X_MODEL_02)); /* I2C custom write function */
@@ -295,27 +306,63 @@ void app_main(void) {
 
 	/* Initialize Wi-Fi */
 	ESP_ERROR_CHECK(wifi_init());
-
-	/* Get OTA data and print device info */
-	print_dev_info();
-
+	
+	/* Initialize clients list */
 	list_init();
-	/* Create FSM task */
-	if (xTaskCreate(
-			clients_timeout_task,
-			"Client Timeout Task",
-			configMINIMAL_STACK_SIZE * 2,
-			NULL,
-			tskIDLE_PRIORITY + 1,
-			NULL) != pdPASS) {
-		ESP_LOGE(TAG, "Failed to create FreeRTOS task");
-		error_handler();
+
+	/* Check if are Wi-Fi credentials provisioned */
+	bool provisioned = false;	
+	ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
+
+	if (provisioned) {
+		ESP_LOGI(TAG, "Already provisioned. Connecting to AP...");
+
+		/* Initialize and configure file system and HTTP server */
+		ESP_ERROR_CHECK(spiffs_init(SPIFFS_BASE_PATH));
+		server_init(SPIFFS_BASE_PATH);
+		server_uri_handler_add("/login", HTTP_POST, login_handler);
+		server_uri_handler_add("/set_settings", HTTP_POST, settings_save_handler);
+		server_uri_handler_add("/get_settings", HTTP_POST, settings_load_handler);
+
+		/* Initialize NAT */
+		ip_napt_enable(ipaddr_addr("192.168.4.1"), 1);
+		ESP_LOGI (TAG, "NAT is enabled");
+		
+		/* Connect to router */
+		esp_wifi_connect();		
+	}
+	else {
+		ESP_LOGI(TAG, "Not provisioned. Waiting while the process running...");
+
+		/* Initialize provisioning */
+		wifi_prov_mgr_config_t prov_config = {
+				.scheme = wifi_prov_scheme_softap,
+				.scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE
+		};
+	
+		ESP_ERROR_CHECK(wifi_prov_mgr_init(prov_config));
+	
+		/* Create endpoint */
+		wifi_prov_mgr_endpoint_create("custom-data");
+	
+		/* Get SoftAP SSID name */
+		char *ap_prov_name = get_device_service_name(CONFIG_WIFI_PROV_SSID_PREFIX);
+		ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
+				WIFI_PROV_SECURITY_1,
+				NULL,
+				ap_prov_name,
+				NULL));
+		free(ap_prov_name);
+
+		/* Register previous created endpoint */
+		wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
 	}
 }
 
 /* Private function definition -----------------------------------------------*/
 /* Initialization functions */
-static esp_err_t wifi_init(void) {
+static esp_err_t wifi_init(void)
+{
 	esp_err_t ret;
 
 	ESP_LOGI(TAG, "Initializing Wi-Fi...");
@@ -336,7 +383,50 @@ static esp_err_t wifi_init(void) {
 
 	/* Create netif instances */
 	esp_netif_create_default_wifi_sta();
-	esp_netif_create_default_wifi_ap();
+	esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+	
+	/* Set DHCP server */
+	ret = esp_netif_dhcps_stop(ap_netif);
+	if (ret != ESP_OK) {
+		return ret;
+	}
+
+	uint32_t dhcps_lease_time = 2 * 15;
+	ret = esp_netif_dhcps_option(
+			ap_netif,
+			ESP_NETIF_OP_SET,
+			ESP_NETIF_IP_ADDRESS_LEASE_TIME,
+			&dhcps_lease_time,
+			sizeof(dhcps_lease_time));
+
+	if (ret != ESP_OK) {
+		return ret;
+	}
+
+	esp_netif_dns_info_t dns_info = {0};
+	dns_info.ip.u_addr.ip4.addr = ipaddr_addr("8.8.8.8");
+	dns_info.ip.type = IPADDR_TYPE_V4;
+	ret = esp_netif_set_dns_info(ap_netif, ESP_NETIF_DNS_MAIN, &dns_info);
+	if (ret != ESP_OK) {
+		return ret;
+	}
+
+	uint8_t dns_offer = 1;
+	ret = esp_netif_dhcps_option(
+			ap_netif,
+			ESP_NETIF_OP_SET,
+			ESP_NETIF_DOMAIN_NAME_SERVER,
+			&dns_offer,
+			sizeof(dns_offer));
+
+	if (ret != ESP_OK) {
+		return ret;
+	}
+
+	ret = esp_netif_dhcps_start(ap_netif);
+	if (ret != ESP_OK) {
+		return ret;
+	}
 
 	/* Initialize Wi-Fi driver */
 	wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
@@ -419,33 +509,8 @@ static esp_err_t wifi_init(void) {
 	if (ret != ESP_OK) {
 		return ret;
 	}
-
-	/* Check if are Wi-Fi credentials provisioned */
-	bool provisioned = false;
-	ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
-
-	if (provisioned) {
-		ESP_LOGI(TAG, "Already provisioned. Connecting to AP...");
-		esp_wifi_connect();
-
-		/* Initizalize and configure file system, server and custom DNS */
-		ESP_ERROR_CHECK(spiffs_init(SPIFFS_BASE_PATH));
-		server_init(SPIFFS_BASE_PATH);
-		server_uri_handler_add("/login", HTTP_POST, login_handler);
-		server_uri_handler_add("/set_settings", HTTP_POST, settings_save_handler);
-		server_uri_handler_add("/get_settings", HTTP_POST, settings_load_handler);
-		cdns_init(SPIFFS_BASE_PATH);
-
-		/* Initialize NAT */
-		ip_napt_enable(ipaddr_addr("192.168.4.1"), 1);
-		ESP_LOGI (TAG, "NAT is enabled");
-
-		is_prov = FSM_EVENT_VAL_SET;
-	}
-	else {
-		is_prov = FSM_EVENT_VAL_CLEAR;
-	}
-
+	
+	/* Return ESP_OK */
 	return ret;
 }
 
@@ -453,68 +518,49 @@ static esp_err_t wifi_init(void) {
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 		int32_t event_id, void *event_data)
 {
+	event_t event;
+	event.src = EVENT_PROCESS_WIFI;
+		
 	switch (event_id) {
-	case WIFI_EVENT_STA_START: {
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_START");
-
-		break;
-	}
-
-	case WIFI_EVENT_STA_CONNECTED: {
-		ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED");
-		break;
-	}
-
 	case WIFI_EVENT_STA_DISCONNECTED: {
 		ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED");
-		is_ip = FSM_EVENT_VAL_CLEAR;
+		
+		event.dst = EVENT_PROCESS_NETWORK;
+		event.request = EVENT_REQUEST_DISCONNECTED;
+		event_send_to_manager(&event);	
+		
 		break;
 	}
 
 	case WIFI_EVENT_AP_STACONNECTED: {
 		ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED");
-
-		wifi_event_ap_staconnected_t *event =
-				(wifi_event_ap_staconnected_t*)event_data;
-
-		/* If the station connected is not close to device, then the
-		 * connection is rejected */
-		wifi_sta_list_t sta;
-		esp_wifi_ap_get_sta_list(&sta);
-
-		for (uint8_t i = 0; i < sta.num; i++) {
-			if (!strncmp((char *)sta.sta[i].mac, (char *)event->mac, 6)) {
-				if (sta.sta[i].rssi <= CONFIG_APP_RSSI_THRESHOLD_JOIN) {
-					esp_wifi_deauth_sta(event->aid);
-				}
-				else {
-					BUZZER_SUCCESS();
-					list_add(event->mac);
-				}
-			}
+		
+		event.dst = EVENT_PROCESS_CLIENTS;
+		event.request = EVENT_REQUEST_ADD;
+		event.data.client.aid = ((wifi_event_ap_staconnected_t *)event_data)->aid;
+		
+		for (uint8_t i = 0; i < 6; i++) {
+			event.data.client.mac[i] = ((wifi_event_ap_staconnected_t *)event_data)->mac[i];
 		}
-
-		/* Set the next state according the number of stations connected */
-		if (clients.num >= settings_get_clients()) {
-			is_full = FSM_EVENT_VAL_SET;
-		}
-
+		
+		event_send_to_manager(&event);
+		
 		break;
 	}
 
 	case WIFI_EVENT_AP_STADISCONNECTED: {
 		ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED");
-
-		wifi_event_ap_stadisconnected_t *event =
-						(wifi_event_ap_stadisconnected_t*)event_data;
-
-		list_remove(event->mac);
-
-		/* Set the next state according the number of stations connected */
-		if (clients.num < settings_get_clients()) {
-			is_full = FSM_EVENT_VAL_CLEAR;
+		
+		event.dst = EVENT_PROCESS_CLIENTS;
+		event.request = EVENT_REQUEST_REMOVE;
+		event.data.client.aid = ((wifi_event_ap_staconnected_t *)event_data)->aid;
+		
+		for (uint8_t i = 0; i < 6; i++) {
+			event.data.client.mac[i] = ((wifi_event_ap_staconnected_t *)event_data)->mac[i];
 		}
-
+		
+		event_send_to_manager(&event);
+		
 		break;
 	}
 
@@ -527,60 +573,63 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 static void ip_event_handler(void *arg, esp_event_base_t event_base,
 		int32_t event_id, void *event_data)
 {
+	event_t event;
+	event.src = EVENT_PROCESS_IP;
+	
 	switch (event_id) {
 	case IP_EVENT_STA_GOT_IP: {
-		ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP");
-		is_ip = FSM_EVENT_VAL_SET;
+		ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP");	
+		
+		event.dst = EVENT_PROCESS_NETWORK;
+		event.request = EVENT_REQUEST_CONNECTED;
+		event_send_to_manager(&event);
+				
 		break;
 	}
 
-	case IP_EVENT_STA_LOST_IP: {
-		ESP_LOGI(TAG, "IP_EVENT_STA_LOST_IP");
-		break;
-	}
-
-	default: {
-		ESP_LOGI(TAG, "Other IP event");
-		break;
-	}
+	default:
+	ESP_LOGI(TAG, "Other IP event");
+	break;
 	}
 }
 
 static void prov_event_handler(void *arg, esp_event_base_t event_base,
 		int32_t event_id, void *event_data)
 {
+	event_t event;
+	event.src = EVENT_PROCESS_PROV;
+	
 	switch (event_id) {
-	case WIFI_PROV_START: {
+	case WIFI_PROV_START:{
 		ESP_LOGI(TAG, "WIFI_PROV_START");
+		event_set_alerts(&event, 0, 0, 255, 2000, 1000);
+		event.request = EVENT_REQUEST_FADE;
+		event_send_to_manager(&event);
+				
 		break;
 	}
-
-	case WIFI_PROV_CRED_RECV: {
-		ESP_LOGI(TAG, "WIFI_PROV_CRED_RECV");
-		break;
-	}
-
-	case WIFI_PROV_CRED_SUCCESS: {
-		ESP_LOGI(TAG, "WIFI_PROV_CRED_SUCCESS");
-		break;
-	}
-
+	
+	
 	case WIFI_PROV_END: {
 		ESP_LOGI(TAG, "WIFI_PROV_END");
-		reset_device(NULL);
+		
+		event.dst = EVENT_PROCESS_ACTIONS;
+		event.request = EVENT_REQUEST_RESET;
+		event_send_to_manager(&event);
+		
 		break;
 	}
 
 	case WIFI_PROV_CRED_FAIL: {
 		ESP_LOGI(TAG, "WIFI_PROV_CRED_FAIL");
-		erase_wifi_creds(NULL);
+		
+		event.dst = EVENT_PROCESS_ACTIONS;
+		event.request = EVENT_REQUEST_RESTORE;
+		event_send_to_manager(&event);
+		
 		break;
 	}
 
-	case WIFI_PROV_DEINIT: {
-		ESP_LOGI(TAG, "WIFI_PROV_DEINIT");
-		break;
-	}
 	default: {
 		ESP_LOGI(TAG, "Other event");
 		break;
@@ -590,7 +639,8 @@ static void prov_event_handler(void *arg, esp_event_base_t event_base,
 
 
 /* Provisioning utils */
-static char *get_device_service_name(const char *ssid_prefix) {
+static char *get_device_service_name(const char *ssid_prefix)
+{
 	char *name = NULL;
 
 	name = malloc((strlen(ssid_prefix) + 6 + 1) * sizeof(*name));
@@ -600,7 +650,8 @@ static char *get_device_service_name(const char *ssid_prefix) {
 }
 
 static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf,
-		ssize_t inlen, uint8_t **outbuf, ssize_t * outlen, void *priv_data) {
+		ssize_t inlen, uint8_t **outbuf, ssize_t * outlen, void *priv_data)
+		{
     if (inbuf) {
     	ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
     }
@@ -619,53 +670,31 @@ static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *in
 }
 
 /* RTOS tasks */
-static void reconnect_wifi_task(void *arg) {
-	uint8_t reconnection_cnt = 0;
-	TickType_t last_time_wake = xTaskGetTickCount();
-
-	for (;;) {
-		/* Try connecting to Wi-Fi router using stored credentials. If
-		 * connection is successful then the task delete itself, in other cases
-		 * this function is executed again
-		 */
-		ESP_LOGW(TAG, "Unable to connect. Retrying...");
-
-		esp_wifi_connect();
-
-		/* Reset the device if it is not possible to recconect to the AP */
-		if (++reconnection_cnt >= 30) {
-			reset_device(NULL);
-		}
-
-		/* Wait CONFIG_APP_RECONNECTION_TIME to try to reconnect */
-		vTaskDelayUntil(&last_time_wake, pdMS_TO_TICKS(reconnection_time));
-	}
-}
-
-static void fsm_task(void *arg) {
-	fsm_t *fsm_inst = (fsm_t *)arg;
-
-	for (;;) {
-		fsm_run(fsm_inst);
-		vTaskDelay(pdMS_TO_TICKS(100));
-	}
-}
-
-static void clients_timeout_task(void *arg) {
+static void tick_task(void *arg) {
 	TickType_t last_wake = xTaskGetTickCount();
+	event_t event;
+	event.src = EVENT_PROCESS_TICK;
 
 	for (;;) {
-		for (uint8_t i = 0; i < clients.num; i++) {
-			if (--clients.client[i].time == 0) {
-				uint16_t aid = 0;
-				esp_wifi_ap_get_sta_aid(clients.client[i].mac, &aid);
-				esp_wifi_deauth_sta(aid);
-				ESP_LOGW(TAG, MACSTR" timeout!", MAC2STR(clients.client[i].mac));
-			}
-		}
-
 		vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
+		
+		/* Send TICK request to CLIENTS process evert second */
+		event.dst = EVENT_PROCESS_CLIENTS;
+		event.request = EVENT_REQUEST_TICK;
+		event_send_to_manager(&event);
 	}
+}
+
+static void health_monitor_task(void *arg) {
+    TickType_t last_wake = xTaskGetTickCount();
+    event_t event;
+    event.src = EVENT_PROCESS_HEALTH;
+
+    for (;;) {
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10000));
+        printf("health monitor\n");
+        tls_health_check();
+    }
 }
 
 /* Utils */
@@ -695,16 +724,11 @@ static void erase_wifi_creds(void *arg)
 	reset_device(NULL);
 }
 
-static void firmware_update(void *arg)
-{
-	is_ota = FSM_EVENT_VAL_SET;
-}
-
 static void print_dev_info(void)
 {
 	char *ap_prov_name = get_device_service_name(CONFIG_WIFI_PROV_SSID_PREFIX);
 
-	at24cs0x_read_serial_number(&at24cs02, serial_number);
+	at24cs0x_read_serial_number(&eeprom, serial_number);
 
 	ESP_LOGI("info",
 			"%s,%02X%02X%02X%02X%02X%02X,%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
@@ -718,91 +742,6 @@ static void print_dev_info(void)
 
 	free(ap_prov_name);
 }
-
-void boot_to_prov_fn(void) {
-	printf("\tINIT -> PROV\r\n");
-	LED_PROV_STATE();
-
-	ESP_LOGI(TAG, "Initializing provisioning...");
-
-	/* Initialize provisioning */
-	wifi_prov_mgr_config_t prov_config = {
-			.scheme = wifi_prov_scheme_softap,
-			.scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE
-	};
-
-	ESP_ERROR_CHECK(wifi_prov_mgr_init(prov_config));
-
-	/* Create endpoint */
-	wifi_prov_mgr_endpoint_create("custom-data");
-
-	/* Get SoftAP SSID name */
-	char *ap_prov_name = get_device_service_name(CONFIG_WIFI_PROV_SSID_PREFIX);
-	ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
-			WIFI_PROV_SECURITY_1,
-			NULL,
-			ap_prov_name,
-			NULL));
-	free(ap_prov_name);
-
-	/* Register previous created endpoint */
-	wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
-};
-
-void any_to_connected_fn(void) {
-	printf("\tANY -> CONNECTED\r\n");
-	LED_CONNECTED_STATE();
-
-	/* Delete task to reconnect to AP */
-	if (reconnect_wifi_handle != NULL) {
-		vTaskDelete(reconnect_wifi_handle);
-		reconnect_wifi_handle = NULL;
-	}
-};
-
-void any_to_disconnected_fn(void) {
-	printf("\tANY -> DISCONNECTED\r\n");
-	LED_DISCONNECTED_STATE();
-
-	/* Create to reconnect to AP */
-	if (reconnect_wifi_handle == NULL) {
-		if (xTaskCreate(
-				reconnect_wifi_task,
-				"Reconnect Wi-Fi Task",
-				configMINIMAL_STACK_SIZE * 2,
-				NULL,
-				tskIDLE_PRIORITY + 1,
-				&reconnect_wifi_handle) != pdPASS) {
-			ESP_LOGE(TAG, "Failed to create FreeRTOS task");
-		}
-	}
-};
-
-void connected_to_full_fn(void) {
-	printf("\tCONNECTED -> FULL\r\n");
-	LED_FULL_STATE();
-};
-
-void connected_to_ota_fn(void) {
-	printf("\tCONNECTED -> OTA\r\n");
-	LED_OTA_STATE();
-
-#ifdef CONFIG_OTA_ENABLE
-	cdns_deinit();
-
-	ESP_LOGI(TAG, "Downloading firmware from %s...", ota_url);
-
-	if (ota_update(ota_url, (char*)ota_cert, 60000) == ESP_OK) {
-		BUZZER_SUCCESS();
-		reset_device(NULL);
-	} else {
-		BUZZER_FAIL();
-		reset_device(NULL);
-	}
-#else
-	ESP_LOGWfas(TAG, "Firmware OTA updates are disabled");
-#endif /* CONFIG_OTA_ENABLE */
-};
 
 static char *read_http_response(httpd_req_t *req)
 {
@@ -940,7 +879,7 @@ static esp_err_t login_handler(httpd_req_t *req)
 
 static bool settings_load(void)
 {
-	if (at24cs0x_read(&at24cs02, SETTINGS_EEPROM_ADDR, (uint8_t*)&settings,
+	if (at24cs0x_read(&eeprom, SETTINGS_EEPROM_ADDR, (uint8_t*)&settings,
 			sizeof(settings_t)) != 0) {
 		ESP_LOGE(TAG, "Failed to load settings");
 		return false;
@@ -965,7 +904,7 @@ static bool settings_load(void)
 
 static bool settings_save(void)
 {
-	if (at24cs0x_write(&at24cs02, SETTINGS_EEPROM_ADDR, (uint8_t*)&settings,
+	if (at24cs0x_write(&eeprom, SETTINGS_EEPROM_ADDR, (uint8_t*)&settings,
 			sizeof(settings_t)) != 0) {
 		ESP_LOGE(TAG, "Failed to save settings");
 		return false;
@@ -1013,10 +952,8 @@ static void list_init(void)
 	clients.client = NULL;
 }
 
-static void list_add(uint8_t *mac)
+static void list_add(uint8_t *mac, uint8_t aid)
 {
-	ESP_LOGI(TAG, "Adding "MACSTR, MAC2STR(mac));
-
 	/* Reallocate memory for the new client */
 	clients.client = (client_t *)realloc(clients.client, (clients.num + 1) * sizeof(client_t));
 
@@ -1028,6 +965,7 @@ static void list_add(uint8_t *mac)
 	/* Fill the new client data */
 	strncpy((char *)clients.client[clients.num].mac, (char *)mac, 6);
 	clients.client[clients.num].time = settings_get_time();
+	clients.client[clients.num].aid = aid;
 
 	/* Increase the clients number */
 	clients.num++;
@@ -1035,8 +973,6 @@ static void list_add(uint8_t *mac)
 
 static void list_remove(uint8_t *mac)
 {
-	ESP_LOGW(TAG, "Removing "MACSTR, MAC2STR(mac));
-
 	/* Search for the client with the same MAC address */
 	uint8_t idx = 0;
 
@@ -1069,7 +1005,7 @@ static esp_err_t spiffs_init(const char *base_path)
 	esp_vfs_spiffs_conf_t conf = {
 			.base_path = base_path,
 			.partition_label = NULL,
-			.max_files = 10,
+			.max_files = 5,
 			.format_if_mount_failed = false
 	};
 
@@ -1100,6 +1036,610 @@ static esp_err_t spiffs_init(const char *base_path)
 
 	return ret;
 }
+
+static esp_err_t app_create_queues(void) {
+	ESP_LOGI(TAG, "Creatbg app queues...");
+	
+	system_events_queue = xQueueCreate(APP_QUEUE_LEN_DEFAULT * 2, sizeof(event_t));
+	
+	if (system_events_queue == NULL) {
+		return ESP_FAIL;
+	}
+	
+	processes_responses_queue = xQueueCreate(APP_QUEUE_LEN_DEFAULT * 2, sizeof(event_t));
+	
+	if (processes_responses_queue == NULL) {
+		return ESP_FAIL;
+	}
+	
+	clients_requests_queue = xQueueCreate(APP_QUEUE_LEN_DEFAULT, sizeof(event_t));
+	
+	if (clients_requests_queue == NULL) {
+		return ESP_FAIL;
+	}
+	
+	actions_requests_queue = xQueueCreate(APP_QUEUE_LEN_DEFAULT, sizeof(event_t));
+	
+	if (actions_requests_queue == NULL) {
+		return ESP_FAIL;
+	}
+	
+	alerts_requests_queue = xQueueCreate(APP_QUEUE_LEN_DEFAULT, sizeof(event_t));
+	
+	if (alerts_requests_queue == NULL) {
+		return ESP_FAIL;
+	}
+	
+	network_requests_queue = xQueueCreate(APP_QUEUE_LEN_DEFAULT, sizeof(event_t));
+	
+	if (network_requests_queue == NULL) {
+		return ESP_FAIL;
+	}	
+	
+	return ESP_OK;
+}
+
+static esp_err_t app_create_tasks(void) {
+	BaseType_t status;	
+		
+	/**/
+	status = xTaskCreatePinnedToCore(
+		tick_task, 
+		"Tick Task",
+		configMINIMAL_STACK_SIZE * 2,
+		NULL,
+		APP_TASK_TICK_PRIORITY,
+		NULL,
+		1);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+		
+	status = xTaskCreatePinnedToCore(
+		health_monitor_task, 
+		"Health Monitor Task",
+		configMINIMAL_STACK_SIZE * 2,
+		NULL,
+		APP_TASK_HEALTH_MONITOR_PRIORITY,
+		NULL,
+		0);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	status = xTaskCreatePinnedToCore(
+		system_events_manager_task, 
+		"Systems Events Manager Task",
+		configMINIMAL_STACK_SIZE,
+		NULL,
+		APP_TASK_SYSTEM_EVENTS_PRIORITY,
+		NULL,
+		1);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	status = xTaskCreatePinnedToCore(
+		processes_responses_manager_task, 
+		"Processes Responses Manager Task",
+		configMINIMAL_STACK_SIZE,
+		NULL,
+		APP_TASK_RESPONSES_MANAGER_PRIORITY,
+		NULL,
+		1);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	status = xTaskCreatePinnedToCore(
+		alerts_task, 
+		"Alerts Task",
+		configMINIMAL_STACK_SIZE * 2,
+		NULL,
+		APP_TASK_ALERTS_PRIORITY,
+		NULL,
+		1);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	status = xTaskCreatePinnedToCore(
+		network_task, 
+		"Network Task",
+		configMINIMAL_STACK_SIZE * 4,
+		NULL,
+		APP_TASK_NETWORK_PRIORITY,
+		NULL,
+		0);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	status = xTaskCreatePinnedToCore(
+		actions_task, 
+		"Actions Task",
+		configMINIMAL_STACK_SIZE * 2,
+		NULL,
+		APP_TASK_ACTIONS_PRIORITY,
+		NULL,
+		1);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	status = xTaskCreatePinnedToCore(
+		clients_task, 
+		"Clients Task",
+		configMINIMAL_STACK_SIZE * 2,
+		NULL,
+		APP_TASK_CLIENTS_PRIORITY,
+		NULL,
+		1);
+		
+	if (status != pdPASS) {
+		return ESP_FAIL;
+	}
+	
+	return ESP_OK;
+}
+
+static void system_events_manager_task(void *arg) {
+	BaseType_t status;
+	event_t event;
+	uint32_t timestamp = 0;
+	
+	for (;;) {
+		status = xQueueReceive(system_events_queue, &event, portMAX_DELAY);
+		
+		if (status == pdPASS) {
+			event.timestamp = timestamp;			
+			switch (event.dst) {
+				case EVENT_PROCESS_CLIENTS:
+				xQueueSend(clients_requests_queue, &event, 0);
+				break;
+				
+				case EVENT_PROCESS_NETWORK:		
+				/* Send event to Network  */
+				xQueueSend(network_requests_queue, &event, 0);
+				
+				if (event.request == EVENT_REQUEST_OTA) {
+					event_set_alerts(&event, 128, 128, 0, 1000, 1000);
+					event_request_to_alerts(&event, EVENT_REQUEST_FADE);			
+				}
+				
+				else if (event.request == EVENT_REQUEST_CONNECTED) {
+					event_set_alerts(&event, 0, 255, 0, 0, 0);
+					event_request_to_alerts(&event, EVENT_REQUEST_SET);			
+				}
+				
+				else if (event.request == EVENT_REQUEST_DISCONNECTED) {
+					event_set_alerts(&event, 255, 0, 0, 200, 200);
+					event_request_to_alerts(&event, EVENT_REQUEST_FADE);			
+				}
+				break;
+				
+				case EVENT_PROCESS_ALERTS:
+				xQueueSend(alerts_requests_queue, &event, 0);
+				break;
+				
+				case EVENT_PROCESS_ACTIONS:
+				xQueueSend(actions_requests_queue, &event, 0);
+				break;
+				
+				default:
+				break;
+			}
+			
+			if (event.src == EVENT_PROCESS_TICK) {
+				timestamp++;
+			}
+		}
+	}
+}
+
+static void processes_responses_manager_task(void *arg) {
+	BaseType_t status;
+	event_t event;
+	
+	for (;;) {
+		status = xQueueReceive(processes_responses_queue, &event, portMAX_DELAY);
+		
+		if (status == pdPASS) {
+			switch (event.response) {
+				case EVENT_RESPONSE_FULL:
+				if (event.src == EVENT_PROCESS_CLIENTS) {
+					event_set_alerts(&event, 180, 75, 0, 0, 0);
+					event_request_to_alerts(&event, EVENT_REQUEST_SET);					
+				}
+				break;
+				
+				case EVENT_RESPONSE_AVAILABLE:
+				if (event.src == EVENT_PROCESS_CLIENTS) {
+					event_set_alerts(&event, 0, 255, 0, 0, 0);
+					event_request_to_alerts(&event, EVENT_REQUEST_SET);
+				}
+				break;
+				
+				case EVENT_RESPONSE_FAIL:
+				if (event.src == EVENT_PROCESS_NETWORK && event.request == EVENT_REQUEST_OTA) {
+					event_set_alerts(&event, 0, 255, 0, 0, 0);
+					event_request_to_alerts(&event, EVENT_REQUEST_SET);
+				}
+				else if (event.src == EVENT_PROCESS_NETWORK && event.request == EVENT_REQUEST_DISCONNECTED) {
+					event_request_to_actions(&event, EVENT_REQUEST_RESET);
+				}
+				else if (event.src == EVENT_PROCESS_CLIENTS && event.request == EVENT_REQUEST_ADD) {
+					event_request_to_network(&event, EVENT_REQUEST_DEAUTH);
+				}
+				break;
+				
+				case EVENT_RESPONSE_SUCCESS:
+				if (event.src == EVENT_PROCESS_CLIENTS && event.request == EVENT_REQUEST_ADD) {
+					event.data.led.update = false;
+					event_request_to_alerts(&event, EVENT_REQUEST_SUCESS);
+				}
+				else if (event.src == EVENT_PROCESS_ALERTS) {
+					event.data.led.update = false;
+					event_request_to_alerts(&event, EVENT_REQUEST_SET);
+				}	
+				else if (event.src == EVENT_PROCESS_NETWORK && event.request == EVENT_REQUEST_OTA) {
+					event_request_to_actions(&event, EVENT_REQUEST_RESET);
+				}
+				break;
+				
+				case EVENT_RESPONSE_TIMEOUT:
+				if (event.src == EVENT_PROCESS_CLIENTS && event.request == EVENT_REQUEST_TICK) {
+					event_request_to_network(&event, EVENT_REQUEST_DEAUTH);
+				}
+				break;
+				
+				default:
+				break;
+			}
+		}
+	}
+}
+
+static void alerts_task(void *arg) {
+	BaseType_t status;
+	event_t event;
+	uint8_t r = 0, g = 0, b = 0;
+	uint16_t on_time = 0, off_time = 0;
+	
+	for (;;) {		
+		status = xQueueReceive(alerts_requests_queue, &event, portMAX_DELAY);
+		
+		if (status == pdPASS) {
+			event.src = EVENT_PROCESS_ALERTS;
+			 
+			switch (event.request) {
+				case EVENT_REQUEST_SET:
+				ESP_LOGW(TAG, "ALERTS_SET");
+				
+				if (event.data.led.update) {
+					r = event.data.led.r;
+					g = event.data.led.g;
+					b = event.data.led.b;	
+				}				
+					
+				led_rgb_set_continuous(&led, r, g, b);
+				break;
+				
+				case EVENT_REQUEST_CLEAR:
+				ESP_LOGW(TAG, "ALERTS_CLEAR");	
+				led_rgb_set_continuous(&led, 0, 0, 0);
+				break;
+				
+				case EVENT_REQUEST_FADE:
+				ESP_LOGW(TAG, "ALERTS_FADE");
+
+				if (event.data.led.update) {
+					r = event.data.led.r;
+					g = event.data.led.g;
+					b = event.data.led.b;			
+					on_time = event.data.led.on_time;
+					off_time = event.data.led.off_time;
+				}
+				
+				led_rgb_set_fade(&led, r, g, b, on_time, off_time);
+				break;
+				
+				case EVENT_REQUEST_SUCESS:
+				ESP_LOGW(TAG, "ALERTS_SUCCESS");
+				led_rgb_set_continuous(&led, 100, 100, 100);
+				buzzer_run(&buzzer, sound_success, 3);
+				vTaskDelay(pdMS_TO_TICKS(200));
+				event_send_response(&event, EVENT_RESPONSE_SUCCESS);			
+				break;
+				
+				case EVENT_REQUEST_FAIL:
+				ESP_LOGW(TAG, "ALERTS_FAIL");
+				led_rgb_set_continuous(&led, 255, 0, 0);
+				buzzer_run(&buzzer, sound_fail, 3);
+				vTaskDelay(pdMS_TO_TICKS(200));
+				event_send_response(&event, EVENT_RESPONSE_SUCCESS);
+				break;			
+				
+				default:
+				break;
+			}
+		}		
+	}	
+}
+
+static void network_task(void *arg) {
+	BaseType_t status;
+	event_t event;
+	uint8_t reconnect_try = 0;
+			
+	for (;;) {
+		status = xQueueReceive(network_requests_queue, &event, portMAX_DELAY);
+		
+		if (status == pdPASS) {
+			event.src = EVENT_PROCESS_NETWORK;
+			 
+			switch (event.request) {
+				case EVENT_REQUEST_OTA:
+				ESP_LOGW(TAG, "NETWORK_OTA");
+				if (ota_update(ota_url, (char*)ota_cert, 120000) == ESP_OK) {
+					event_send_response(&event, EVENT_RESPONSE_SUCCESS);
+				}
+				else {
+					event_send_response(&event, EVENT_RESPONSE_FAIL);
+				}
+				break;
+				
+				case EVENT_REQUEST_DISCONNECTED:
+				ESP_LOGW(TAG, "NETWORK_DISCONNECTED");		
+				esp_wifi_disconnect();
+				esp_wifi_connect();
+				
+				if (reconnect_try++ >= 20) {
+					event_send_response(&event, EVENT_RESPONSE_FAIL);
+				}
+				break;
+				
+				case EVENT_REQUEST_DEAUTH:
+				ESP_LOGW(TAG, "NETWORK_DEAUTH");
+				ESP_LOGE(TAG, MACSTR " DEAUTH", MAC2STR(event.data.client.mac));
+				esp_wifi_deauth_sta(event.data.client.aid);
+				break;
+				
+				case EVENT_REQUEST_CONNECTED:
+				ESP_LOGW(TAG, "NETWORK_CONNECTED");					
+				break;
+				
+				case EVENT_REQUEST_RESET:
+				ESP_LOGW(TAG, "NETWORK_RESET");
+				esp_wifi_stop();
+				vTaskDelay(pdMS_TO_TICKS(100));
+				esp_wifi_start();
+				vTaskDelay(pdMS_TO_TICKS(100));
+				break;
+
+				default:
+				break;
+			}
+		}
+	}	
+}
+
+static void actions_task(void *arg) {
+	BaseType_t status;
+	event_t event;
+		
+	for (;;) {
+		status = xQueueReceive(actions_requests_queue, &event, portMAX_DELAY);
+		
+		if (status == pdPASS) {
+			 
+			event.src = EVENT_PROCESS_ACTIONS;
+			switch (event.request) {
+				case EVENT_REQUEST_RESET:
+				ESP_LOGW(TAG, "ACTIONS_RESET");
+				/* todo: send response and delay to notify with sound */
+				esp_restart();
+				break;
+				
+				case EVENT_REQUEST_RESTORE:
+				ESP_LOGW(TAG, "ACTIONS_RESTORE");
+				erase_wifi_creds(NULL);
+				break;
+				
+				default:
+				break;
+			}
+		}
+	}
+}
+
+static void clients_task(void *arg)	{
+	BaseType_t status;
+	event_t event;
+	wifi_sta_list_t sta_list;
+		
+	for (;;) {
+		status = xQueueReceive(clients_requests_queue, &event, portMAX_DELAY);
+		
+			if (status == pdPASS) {
+			 
+			event.src = EVENT_PROCESS_CLIENTS;
+			switch (event.request) {
+				case EVENT_REQUEST_ADD:
+				ESP_LOGW(TAG, "CLIENTS_ADD");
+				
+				esp_wifi_ap_get_sta_list(&sta_list);
+				
+				for (uint8_t i = 0; i < sta_list.num; i++) {
+					if (!strncmp((char *)sta_list.sta[i].mac, (char *)event.data.client.mac, 6)) {
+						if (sta_list.sta[i].rssi <= CONFIG_APP_RSSI_THRESHOLD_JOIN) {
+							event_send_response(&event, EVENT_RESPONSE_FAIL);
+						}
+						else {
+							list_add(event.data.client.mac, event.data.client.aid);
+							ESP_LOGI(TAG, MACSTR " added to list. Clients in list: %d/%d", MAC2STR(event.data.client.mac), clients.num, settings_get_clients());
+							event_send_response(&event, EVENT_RESPONSE_SUCCESS);
+							
+							if (clients.num == settings_get_clients()) {
+								event_send_response(&event, EVENT_RESPONSE_FULL);
+							}
+						}
+					}
+				}						
+				
+				break;
+				
+				case EVENT_REQUEST_REMOVE:
+				ESP_LOGW(TAG, "CLIENTS_REMOVE");
+				
+				/* Process */
+				list_remove(event.data.client.mac);
+				ESP_LOGE(TAG, MACSTR " removed from list. Clients in list: %d/%d", MAC2STR(event.data.client.mac), clients.num, settings_get_clients());
+				
+				if (clients.num == 0) {
+					event_send_response(&event, EVENT_RESPONSE_EMPTY);
+				}
+				else {
+					event_send_response(&event, EVENT_RESPONSE_AVAILABLE);
+				}
+				
+				break;
+				
+				case EVENT_REQUEST_TICK:
+//				ESP_LOGW(TAG, "CLIENTS_TICK");
+				
+				/* Process */
+				for (uint8_t i = 0; i < clients.num; i++) {
+					if (--clients.client[i].time == 0) {
+						event.data.client.aid = clients.client[i].aid;
+						strncpy((char *)event.data.client.mac, (char *)clients.client[i].mac, 6);
+						event_send_response(&event, EVENT_RESPONSE_TIMEOUT);
+					}
+				}
+				
+				break;
+				
+				default:
+				break;
+			}
+		}
+	}
+}
+
+void button_cb(void *arg) {
+	event_t event;
+	event.src = EVENT_PROCESS_BUTTON;
+	event.request = (event_request_t)arg;
+	
+	if (event.request == EVENT_REQUEST_OTA) {
+		event.dst = EVENT_PROCESS_NETWORK;
+	}
+	else {
+		event.dst = EVENT_PROCESS_ACTIONS;
+	}
+	
+	event_send_to_manager(&event);
+}
+
+static void event_send_to_manager(event_t *event)
+{
+	switch (event->src) {
+		case EVENT_PROCESS_WIFI:
+		case EVENT_PROCESS_IP:
+		case EVENT_PROCESS_PROV:
+		case EVENT_PROCESS_TICK:
+		case EVENT_PROCESS_BUTTON:
+		case EVENT_PROCESS_WDT:
+		xQueueSend(system_events_queue, event, 0);
+		break;
+ 		
+		default:
+		ESP_LOGW(TAG, "Unknown process: %d", event->src);
+		break;
+	}
+}
+
+static void event_send_response(event_t *event, event_response_t response)
+{
+	event->response = response;
+	xQueueSend(processes_responses_queue, event, 0);
+}
+
+static void event_request_to_alerts(event_t *const event, event_request_t request)
+{
+	event->dst = EVENT_PROCESS_ALERTS;
+	event->request = request;
+	xQueueSend(alerts_requests_queue, event, 0);
+}
+
+static void event_request_to_actions(event_t *const event, event_request_t request)
+{
+	event->dst = EVENT_PROCESS_ACTIONS;
+	event->request = request;
+	xQueueSend(actions_requests_queue, event, 0);
+}
+
+static void event_request_to_network(event_t *const event, event_request_t request)
+{
+	event->dst = EVENT_PROCESS_NETWORK;
+	event->request = request;
+	xQueueSend(network_requests_queue, event, 0);
+}
+
+static void event_set_alerts(event_t *const event, uint8_t r, uint8_t g, uint8_t b, uint16_t on_time, uint16_t off_time)
+{
+	event->data.led.update = true;
+	event->data.led.r = r;
+	event->data.led.g = g;
+	event->data.led.b = b;
+	event->data.led.on_time = on_time;
+	event->data.led.off_time = off_time;
+}
+
+static int tls_health_check(void)
+{
+    const char *host = "google.com";
+    const char *port = "443";
+    struct addrinfo hints = {
+        .ai_family   = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+    };
+    struct addrinfo *res = NULL;
+    int ret = -1, sock;
+
+    if (getaddrinfo(host, port, &hints, &res) != 0 || res == NULL) {
+        goto cleanup;  // no res o falló resolución
+    }
+
+    sock = socket(res->ai_family, res->ai_socktype, 0);
+    if (sock < 0) {
+        goto cleanup;  // no olvides liberar res
+    }
+
+    struct timeval timeout = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    if (connect(sock, res->ai_addr, res->ai_addrlen) == 0) {
+        ret = 0;       // OK
+    }
+
+    // Cerrá siempre el socket
+    close(sock);
+
+cleanup:
+    if (res) {
+        freeaddrinfo(res);
+    }
+    return ret;
+}
+
 
 /***************************** END OF FILE ************************************/
 

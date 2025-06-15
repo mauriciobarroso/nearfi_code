@@ -92,17 +92,14 @@ esp_err_t ota_update(const char *ota_url, const char *ota_cert,
 	}
 
 	TickType_t initial_time = xTaskGetTickCount();
-	while (1) {
-		ret = esp_https_ota_perform(https_ota_handle);
-		if (ret != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+	do {		
+		if (pdMS_TO_TICKS(xTaskGetTickCount() - initial_time) > timeout_ms) {
+			ret = ESP_ERR_TIMEOUT;
 			break;
 		}
-		TickType_t elapsed_time = xTaskGetTickCount() - initial_time;
-
-		if (pdMS_TO_TICKS(elapsed_time) > timeout_ms) {
-			return ESP_ERR_TIMEOUT;
-		}
-	}
+		
+		ret = esp_https_ota_perform(https_ota_handle);
+	} while (ret == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
 
 	if (ret != ESP_OK) {
 		esp_https_ota_abort(https_ota_handle);
@@ -112,11 +109,8 @@ esp_err_t ota_update(const char *ota_url, const char *ota_cert,
 	ret = esp_https_ota_finish(https_ota_handle);
 
 	if (ret != ESP_OK) {
-		ESP_LOGE("misc", "Failed to update firmware");
 		return ret;
 	}
-
-	ESP_LOGI("misc", "Firmware updated successfully");
 
 	/* Return ESP_OK */
 	return ret;

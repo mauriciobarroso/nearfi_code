@@ -9,7 +9,7 @@
   *
   * MIT License
   *
-  * Copyright (c) 2023 Mauricio Barroso Benavides
+  * Copyright (c) 2024 Mauricio Barroso Benavides
   *
   * Permission is hereby granted, free of charge, to any person obtaining a copy
   * of this software and associated documentation files (the "Software"), to
@@ -306,10 +306,10 @@ static void dns_ext_task(void *arg)
 	for (;;) {
 		if (xQueueReceive(dns_query_queue, &query, portMAX_DELAY)) {
 			sendto(sock, query.buffer, query.len, 0,
-					(struct sockaddr *)&dns_addr, sizeof(dns_addr));
+					(struct sockaddr*)&dns_addr, sizeof(dns_addr));
 
-			int len = recvfrom(sock, query.buffer, CDNS_MESSAGE_MAX_LEN, 0, NULL,
-					NULL);
+			int len = recvfrom(sock, query.buffer, CDNS_MESSAGE_MAX_LEN, 0,
+					NULL, NULL);
 
 			if (len < 0) {
 				printf("Failed to receive from DNS server socket\r\n");
@@ -338,18 +338,18 @@ static char **read_domains_from_file(const char *filename)
     char buffer[256];
 
     while (fgets(buffer, sizeof(buffer), file)) {
-        // Skip lines that start with '#'
+        /* Skip lines that start with '#' */
         if (buffer[0] == '#' || buffer[0] == '\n') {
             continue;
         }
 
-        // Split the line to get the domain name (skip the IP address)
+        /* Split the line to get the domain name (skip the IP address) */
         char *domain = strchr(buffer, ' ');
         if (domain) {
-            domain = domain + 1; // Move past the space
-            domain[strcspn(domain, "\n")] = 0; // Remove newline character
+            domain = domain + 1; /* Move past the space */
+            domain[strcspn(domain, "\n")] = 0; /* Remove newline character */
 
-            // Allocate or reallocate memory for the domain array
+            /* Allocate or reallocate memory for the domain array */
             char **new_domains = (char **)heap_caps_realloc(domains, (domain_count + 1) * sizeof(char *), MALLOC_CAP_SPIRAM);
             if (!new_domains) {
                 printf("Failed to allocate memory\n");
@@ -363,7 +363,8 @@ static char **read_domains_from_file(const char *filename)
             domains[domain_count] = (char *)heap_caps_malloc(strlen(domain) + 1, MALLOC_CAP_SPIRAM);
             if (!domains[domain_count]) {
                 printf("Failed to allocate memory for domain\n");
-                // Free already allocated domains and close the file
+
+                /* Free already allocated domains and close the file */
                 for (size_t i = 0; i < domain_count; i++) {
                     free(domains[i]);
                 }
@@ -372,7 +373,7 @@ static char **read_domains_from_file(const char *filename)
                 return NULL;
             }
 
-            // Copy the domain to the array
+            /* Copy the domain to the array */
             strcpy(domains[domain_count], domain);
             domain_count++;
         }
@@ -381,7 +382,9 @@ static char **read_domains_from_file(const char *filename)
     fclose(file);
 
     /* Null-terminate the array */
-    char **final_domains = (char **)heap_caps_realloc(domains, (domain_count + 1) * sizeof(char *), MALLOC_CAP_SPIRAM);
+	char **final_domains = (char**)heap_caps_realloc(domains,
+			(domain_count + 1) * sizeof(char *), MALLOC_CAP_SPIRAM);
+
     if (final_domains) {
         domains = final_domains;
         domains[domain_count] = NULL;
