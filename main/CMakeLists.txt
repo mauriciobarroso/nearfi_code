@@ -2,7 +2,7 @@
 # for more information about component CMakeLists.txt files.
 
 idf_component_register(
-    SRCS main.c misc.c nvs.c cdns.c server.c
+    SRCS main.c misc.c nvs.c server.c clients.c settings.c
     INCLUDE_DIRS
     PRIV_INCLUDE_DIRS
     REQUIRES
