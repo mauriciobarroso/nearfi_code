@@ -42,9 +42,8 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include <stdint.h>
-#include <stdio.h>
 #include <stdbool.h>
-#include <stdlib.h>
+
 #include "lwip/stats.h"
 
 /* Exported Macros -----------------------------------------------------------*/
@@ -52,65 +51,119 @@ extern "C" {
 
 /* Exported typedef ----------------------------------------------------------*/
 typedef enum {
-	EVENT_PROCESS_NO = 0,
+	STATE_ALERTS_IDLE = 0,
+	STATE_ALERTS_PROCESS,
+	STATE_ALERTS_SIGNAL,
 	
-	/* Producers */
-	EVENT_PROCESS_WIFI,
-	EVENT_PROCESS_IP,
-	EVENT_PROCESS_PROV,
-	EVENT_PROCESS_TICK,
-	EVENT_PROCESS_BUTTON,
-	EVENT_PROCESS_WDT,
-	EVENT_PROCESS_HEALTH,
-	
-	/* Consumers */
-	EVENT_PROCESS_ACTIONS,
-	EVENT_PROCESS_ALERTS,
-	EVENT_PROCESS_NETWORK,
-	EVENT_PROCESS_CLIENTS,
-	EVENT_PROCESS_MAX
-} event_process_t;
+	STATE_ALERTS_MAX
+} state_alerts_t;
 
 typedef enum {
-	EVENT_REQUEST_NO = 0,
-	EVENT_REQUEST_OTA,
-	EVENT_REQUEST_FADE,
-	EVENT_REQUEST_SET,
-	EVENT_REQUEST_CLEAR,
-	EVENT_REQUEST_SUCESS,
-	EVENT_REQUEST_FAIL,
-	EVENT_REQUEST_WARNING,
-	EVENT_REQUEST_CONNECTED,
-	EVENT_REQUEST_DISCONNECTED,
-	EVENT_REQUEST_ENABLE,
-	EVENT_REQUEST_DISABLE,
-	EVENT_REQUEST_ADD,
-	EVENT_REQUEST_REMOVE,
-	EVENT_REQUEST_RESET,
-	EVENT_REQUEST_RESTORE,
-	EVENT_REQUEST_WDT,
-	EVENT_REQUEST_TICK,
-	EVENT_REQUEST_DEAUTH,
-	EVENT_REQUEST_MAX
-} event_request_t;
+	ALERTS_IDLE_CLEAR = 0,
+	ALERTS_IDLE_ONLINE,
+	ALERTS_IDLE_OFFLINE,
+	ALERTS_IDLE_DICONNECTED,
+	
+	ALERTS_IDLE_MAX
+} alerts_idle_t;
 
 typedef enum {
-	EVENT_RESPONSE_NO = 0,
-	EVENT_RESPONSE_SUCCESS,
-	EVENT_RESPONSE_FAIL,
-	EVENT_RESPONSE_WARNING,
-	EVENT_RESPONSE_TIMEOUT,
-	EVENT_RESPONSE_EMPTY,
-	EVENT_RESPONSE_FULL,
-	EVENT_RESPONSE_AVAILABLE,
-	EVENT_RESPONSE_MAX
-} event_response_t;
+	ALERTS_PROCESS_CLEAR = 0,
+	ALERTS_PROCESS_PROV,
+	ALERTS_PROCESS_OTA,
+	
+	ALERTS_PROCESS_MAX
+} alerts_process_t;
+
+typedef enum {
+	ALERTS_SIGNAL_CLEAR = 0,
+	ALERTS_SIGNAL_SUCCESS,
+	ALERTS_SIGNAL_FAIL,
+	ALERTS_SIGNAL_WARNING,
+	
+	ALERTS_SIGNAL_MAX
+} alerts_signal_t;
+
+typedef enum {
+	EVENT_TRG_BUTTON_SHORT,
+	EVENT_TRG_BUTTON_MEDIUM,
+	EVENT_TRG_BUTTON_LONG,
+	
+	EVENT_TRG_WIFI_AP_STACONNECTED,
+	EVENT_TRG_WIFI_AP_STADISCONNECTED,
+	EVENT_TRG_WIFI_STA_DISCONNECTED,
+	
+	EVENT_TRG_PROV_START,
+	EVENT_TRG_PROV_END,
+	EVENT_TRG_PROV_FAIL,
+	
+	EVENT_TRG_HEALTH_INTERNET,
+	EVENT_TRG_HEALTH_NO_INTERNET,
+	
+	EVENT_TRG_WDT,
+	EVENT_TRG_TICK,
+	EVENT_TRG_IP_GOT,
+	
+	EVENT_TRG_MAX
+} event_trg_t;
+	
+typedef enum {	
+	EVENT_RSP_ACTIONS_RESTORE_SUCCESS,
+	EVENT_RSP_ACTIONS_RESTORE_FAIL,
+	
+	EVENT_RSP_NETWORK_OTA_START,
+	EVENT_RSP_NETWORK_OTA_SUCCESS,
+	EVENT_RSP_NETWORK_OTA_FAIL,
+	EVENT_RSP_NETWORK_OTA_TIMEOUT,
+	EVENT_RSP_NETWORK_RECONNECT_TIMEOUT,
+	
+	EVENT_RSP_CLIENTS_ADD_SUCCESS,
+	EVENT_RSP_CLIENTS_ADD_FAIL,
+	EVENT_RSP_CLIENTS_ADD_FULL,
+	EVENT_RSP_CLIENTS_REMOVE_EMPTY,
+	EVENT_RSP_CLIENTS_REMOVE_AVAILABLE,
+	EVENT_RSP_CLIENTS_TICK_TIMEOUT,
+	
+	EVENT_RSP_MAX	
+} event_rsp_t;
+
+typedef enum {
+	EVENT_CMD_NO = 0,
+	
+	EVENT_CMD_ALERTS_IDLE_ONLINE,
+	EVENT_CMD_ALERTS_IDLE_OFFLINE,
+	EVENT_CMD_ALERTS_IDLE_DISCONNECTED,
+	EVENT_CMD_ALERTS_IDLE_FULL,
+	EVENT_CMD_ALERTS_IDLE_NO_FULL,
+	EVENT_CMD_ALERTS_PROCESS_PROV,
+	EVENT_CMD_ALERTS_PROCESS_OTA,
+	EVENT_CMD_ALERTS_PROCESS_RECONNECT,
+	EVENT_CMD_ALERTS_PROCESS_END,
+	EVENT_CMD_ALERTS_SIGNAL_SUCCESS,
+	EVENT_CMD_ALERTS_SIGNAL_FAIL,
+	EVENT_CMD_ALERTS_SIGNAL_WARNING,
+	EVENT_CMD_ALERTS_MAX,
+	
+	EVENT_CMD_NETWORK_OTA,
+	EVENT_CMD_NETWORK_RECONNECT,
+	EVENT_CMD_NETWORK_DEAUTH,
+	EVENT_CMD_NETWORK_MAX,
+	
+	EVENT_CMD_CLIENTS_ADD,
+	EVENT_CMD_CLIENTS_REMOVE,
+	EVENT_CMD_CLIENTS_TICK,
+	EVENT_CMD_CLIENTS_MAX,
+	
+	EVENT_CMD_ACTIONS_RESET,
+	EVENT_CMD_ACTIONS_RESTORE,
+	EVENT_CMD_ACTIONS_WDT,
+	EVENT_CMD_ACTIONS_MAX,
+	
+	EVENT_CMD_MAX	
+} event_cmd_t;
 
 typedef struct {
-	event_process_t src;
-	event_process_t dst;
-	event_request_t request;
-	event_response_t response;		
+	int num;
 	union {
 		struct {
 			uint8_t aid;
@@ -121,41 +174,22 @@ typedef struct {
 			multi_heap_info_t heap_dram;
 			multi_heap_info_t heap_psram;
 		} health;
-		struct {
-			bool update;
-			uint8_t r;
-			uint8_t g;
-			uint8_t b;
-			uint16_t on_time;
-			uint16_t off_time;
-		} led;
 	} data;
 	uint32_t timestamp;	
 } event_t; 
+
+typedef void (*event_cb_t)(event_t *const event);
+
+typedef struct {
+	event_trg_t event;
+	event_cmd_t command;
+} event_route_t;
 
 typedef enum {
 	SYSTEM_ERROR = -1,
 	SYSTEM_OK = 0,
 	SYSTEM_WARNING = 1
 } system_return_t;
-
-typedef struct {
-	char ssid[32];
-	uint8_t clients;
-	uint16_t time;
-} settings_t;
-
-typedef struct {
-	uint8_t aid;
-	uint8_t mac[6];
-	
-	uint16_t time;
-} client_t;
-
-typedef struct {
-	uint8_t num;
-	client_t *client;
-} client_list_t;
 
 /* Exported variables --------------------------------------------------------*/
 
