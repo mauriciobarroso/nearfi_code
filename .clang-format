@@ -1,8 +1,8 @@
-# We'll use defaults from the LLVM style, but with some modifications so that it's close to the CDT K&R style.
+# Basado en LLVM + CDT K&R, pero con indentación de ancho 2
 BasedOnStyle: LLVM
-UseTab: Always
-IndentWidth: 4
-TabWidth: 4
+UseTab: Never
+IndentWidth: 2       # cada nivel de indentación equivale a 2 columnas
+TabWidth: 2          # un tab se trata como 2 columnas
 BreakConstructorInitializers: AfterColon
 IndentAccessModifiers: false
 AccessModifierOffset: -4
